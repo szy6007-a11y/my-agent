@@ -258,6 +258,7 @@ export function ChatWorkspace() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const touchStartYRef = useRef<number | null>(null);
+  const userDetachedFromBottomRef = useRef(false);
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${shortSessionId(sessionId)}` : "尚未创建会话"),
     [sessionId],
@@ -292,10 +293,14 @@ export function ChatWorkspace() {
   const updateBottomState = useCallback(
     (isAtBottom: boolean) => {
       isAtBottomRef.current = isAtBottom;
-      if (isAtBottom) {
+
+      if (isAtBottom && !userDetachedFromBottomRef.current) {
         autoScrollRef.current = true;
       }
-      setShowScrollToBottom(messages.length > 0 && !isAtBottom);
+
+      setShowScrollToBottom(
+        messages.length > 0 && (!isAtBottom || userDetachedFromBottomRef.current),
+      );
     },
     [messages.length],
   );
@@ -303,10 +308,15 @@ export function ChatWorkspace() {
   const markManualScrollAway = useCallback(() => {
     const element = messagesRef.current;
 
-    if (messages.length === 0 || !element || element.scrollTop <= 0) {
+    if (
+      messages.length === 0 ||
+      !element ||
+      element.scrollHeight <= element.clientHeight
+    ) {
       return;
     }
 
+    userDetachedFromBottomRef.current = true;
     autoScrollRef.current = false;
     setShowScrollToBottom(true);
   }, [messages.length]);
@@ -318,6 +328,7 @@ export function ChatWorkspace() {
       autoScrollRef.current = true;
       isAtBottomRef.current = true;
       lastScrollTopRef.current = 0;
+      userDetachedFromBottomRef.current = false;
       setShowScrollToBottom(false);
       return;
     }
@@ -327,20 +338,31 @@ export function ChatWorkspace() {
     const distanceToBottom =
       element.scrollHeight - nextScrollTop - element.clientHeight;
     const isAtBottom = distanceToBottom <= SCROLL_BOTTOM_FALLBACK_THRESHOLD;
+    const isScrollingUp = nextScrollTop < previousScrollTop - 2;
+    const isScrollingDown = nextScrollTop > previousScrollTop + 2;
 
-    updateBottomState(isAtBottom);
-    if (!isAtBottom && nextScrollTop < previousScrollTop - 2) {
+    if (isScrollingUp && !isAtBottom) {
+      userDetachedFromBottomRef.current = true;
       autoScrollRef.current = false;
       setShowScrollToBottom(true);
+    } else if (isAtBottom && isScrollingDown) {
+      userDetachedFromBottomRef.current = false;
+      updateBottomState(true);
+    } else {
+      updateBottomState(isAtBottom);
     }
     lastScrollTopRef.current = nextScrollTop;
   }, [messages.length, updateBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const element = messagesRef.current;
+
+    userDetachedFromBottomRef.current = false;
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
-    messagesEndRef.current?.scrollIntoView({
-      block: "end",
+
+    element?.scrollTo({
+      top: element.scrollHeight,
       behavior,
     });
     setShowScrollToBottom(false);
@@ -356,6 +378,7 @@ export function ChatWorkspace() {
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
     lastScrollTopRef.current = 0;
+    userDetachedFromBottomRef.current = false;
     setShowScrollToBottom(false);
   }, []);
 
@@ -627,6 +650,7 @@ export function ChatWorkspace() {
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
     lastScrollTopRef.current = 0;
+    userDetachedFromBottomRef.current = false;
     setMessages([]);
     setSessionId(null);
     setShowScrollToBottom(false);
@@ -666,6 +690,7 @@ export function ChatWorkspace() {
       autoScrollRef.current = true;
       isAtBottomRef.current = true;
       lastScrollTopRef.current = 0;
+      userDetachedFromBottomRef.current = false;
       setMessages(
         body.messages.map((message) => ({
           content: message.content,
@@ -710,6 +735,7 @@ export function ChatWorkspace() {
     setInput("");
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setIsStreaming(true);
 
