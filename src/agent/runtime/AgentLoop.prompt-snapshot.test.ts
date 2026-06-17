@@ -40,6 +40,33 @@ class FakeModelRouter {
   }
 }
 
+class ToolLoopThenFinalModelRouter {
+  readonly calls: Array<{ lastUserMessage: string; toolCount: number }> = [];
+
+  async *stream(input: ModelStreamInput) {
+    const lastUserMessage =
+      [...input.context.messages].reverse().find((message) => message.role === "user")?.content ?? "";
+    const toolCount = input.tools?.length ?? 0;
+    this.calls.push({ lastUserMessage, toolCount });
+
+    if (toolCount > 0) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: "{}",
+            id: `call_${this.calls.length}`,
+            name: "unknown_tool",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "基于已返回的搜索结果，这是最终回答。" };
+  }
+}
+
 class FakeSessionRepository {
   readonly messages: AgentMessage[] = [];
   readonly statuses: RunStatus[] = [];
@@ -140,4 +167,48 @@ test("AgentLoop freezes the session prompt snapshot across runs", async () => {
   assert.equal(promptAssembler.count, 1);
   assert.equal(sessions.savedSnapshots, 1);
   assert.deepEqual(modelRouter.systemPrompts, ["prompt-1", "prompt-1"]);
+});
+
+test("AgentLoop finalizes without tools after tool round limit", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const contextEngine = new ContextEngine({
+    assemble: () => makePrompt("tool-loop-prompt"),
+  } as unknown as PromptAssembler);
+  const modelRouter = new ToolLoopThenFinalModelRouter();
+  const sessions = new FakeSessionRepository();
+  const loop = new AgentLoop(
+    contextEngine,
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 128,
+      model: "deepseek-v4-flash",
+      runId: "run_tool_limit",
+      sessionId: "sess_tool_limit",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+    }),
+  );
+  const deltas = events
+    .filter((event): event is Extract<AgentEvent, { type: "assistant.delta" }> =>
+      event.type === "assistant.delta",
+    )
+    .map((event) => event.text)
+    .join("");
+
+  assert.equal(modelRouter.calls.length, 7);
+  assert.equal(modelRouter.calls.at(-1)?.toolCount, 0);
+  assert.match(modelRouter.calls.at(-1)?.lastUserMessage ?? "", /工具调用轮次已经达到上限/);
+  assert.equal(deltas, "基于已返回的搜索结果，这是最终回答。");
+  assert.equal(sessions.messages.at(-1)?.content, "基于已返回的搜索结果，这是最终回答。");
+  assert.ok(sessions.statuses.includes("finalizing"));
+  assert.equal(events.at(-1)?.type, "run.completed");
 });

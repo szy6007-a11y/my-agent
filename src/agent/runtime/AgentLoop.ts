@@ -12,6 +12,9 @@ import {
 import { ToolRegistry } from "@/agent/tools/ToolRegistry";
 
 const MAX_TOOL_ROUNDS = 6;
+const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
+  "工具调用轮次已经达到上限。请停止调用工具，基于上面已经返回的工具结果给出当前可支持的最终回答；如果证据不足，请说明限制和已经查到的信息。";
+const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
 
 function failedToolMessage(result: string): string | null {
   try {
@@ -274,16 +277,92 @@ export class AgentLoop {
         }
       }
 
-      const fallback =
-        visibleAssistantText.trim() ?
-          `${visibleAssistantText}\n\n（工具调用轮次达到上限，已停止继续调用工具。）`
-        : "工具调用轮次达到上限，已停止继续调用工具。";
+      await this.sessions.updateRunStatus(input.runId, "finalizing");
+      let finalizerText = "";
+      for await (const event of this.modelRouter.stream({
+        context: {
+          ...context,
+          messages: [
+            ...workingMessages,
+            {
+              role: "user",
+              content: TOOL_ROUND_LIMIT_FINALIZER_PROMPT,
+            },
+          ],
+        },
+        maxTokens: input.maxTokens,
+        model: input.model,
+        runId: input.runId,
+        signal: input.signal,
+        sessionId: input.sessionId,
+        thinking: input.thinking,
+        tools: [],
+        userId: input.userId,
+      })) {
+        if (input.signal.aborted) {
+          await this.sessions.updateRunStatus(input.runId, "aborted");
+          yield { type: "run.aborted", runId: input.runId, reason: "client_aborted" };
+          return;
+        }
+
+        if (event.type === "text_delta") {
+          finalizerText += event.text;
+          visibleAssistantText += event.text;
+          yield {
+            type: "assistant.delta",
+            messageId: assistantMessageId,
+            text: event.text,
+          };
+        }
+
+        if (event.type === "reasoning_delta") {
+          yield {
+            type: "reasoning.delta",
+            messageId: assistantMessageId,
+            text: event.text,
+          };
+        }
+
+        if (event.type === "usage") {
+          yield {
+            type: "usage.updated",
+            inputTokens: event.inputTokens,
+            outputTokens: event.outputTokens,
+            totalTokens: event.totalTokens,
+          };
+        }
+      }
+
+      if (!finalizerText.trim()) {
+        const fallbackDelta =
+          visibleAssistantText.trim() ?
+            `\n\n（${TOOL_ROUND_LIMIT_FALLBACK}）`
+          : TOOL_ROUND_LIMIT_FALLBACK;
+        visibleAssistantText += fallbackDelta;
+        yield {
+          type: "assistant.delta",
+          messageId: assistantMessageId,
+          text: fallbackDelta,
+        };
+      }
+
       const finalMessage = await this.sessions.appendMessage({
-        content: fallback,
+        content: visibleAssistantText,
         role: "assistant",
         sessionId: input.sessionId,
       });
       await this.sessions.updateRunStatus(input.runId, "completed");
+      void this.backgroundReview
+        .maybeRun({
+          model: input.model,
+          runId: input.runId,
+          sessionId: input.sessionId,
+          thinking: input.thinking,
+          userId: input.userId,
+        })
+        .catch((error) => {
+          console.error("Background memory review failed", error);
+        });
       yield {
         type: "run.completed",
         finalMessageId: finalMessage.id,
