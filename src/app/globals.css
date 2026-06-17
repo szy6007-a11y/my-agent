@@ -38,7 +38,8 @@ button {
   cursor: pointer;
 }
 
-body > button[aria-label="Open Next.js Dev Tools"] {
+body > button[aria-label="Open Next.js Dev Tools"],
+[data-nextjs-dev-tools-button] {
   display: none !important;
 }
 
