@@ -4,7 +4,12 @@ import test from "node:test";
 import type { PromptAssembler, PromptAssembly } from "@/agent/context/PromptAssembler";
 import type { ModelStreamInput } from "@/agent/models/ProviderAdapter";
 import type { ModelRouter } from "@/agent/models/ModelRouter";
-import type { AgentEvent, AgentMessage, RunStatus } from "@/agent/runtime/types";
+import type {
+  AgentEvent,
+  AgentMessage,
+  ModelToolCall,
+  RunStatus,
+} from "@/agent/runtime/types";
 import type { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
 import type { SessionRepository } from "@/agent/sessions/SessionRepository";
 
@@ -67,6 +72,32 @@ class ToolLoopThenFinalModelRouter {
   }
 }
 
+class ToolNarrationThenFinalModelRouter {
+  readonly calls: number[] = [];
+
+  async *stream(input: ModelStreamInput) {
+    const toolCount = input.tools?.length ?? 0;
+    this.calls.push(toolCount);
+
+    if (this.calls.length === 1) {
+      yield { type: "text_delta" as const, text: "Let me search first." };
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: "{}",
+            id: "call_search",
+            name: "unknown_tool",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "这是最终回答。" };
+  }
+}
+
 class FakeSessionRepository {
   readonly messages: AgentMessage[] = [];
   readonly statuses: RunStatus[] = [];
@@ -98,12 +129,18 @@ class FakeSessionRepository {
     content: string;
     role: AgentMessage["role"];
     sessionId: string;
+    toolCallId?: string;
+    toolCalls?: ModelToolCall[];
+    toolName?: string;
   }): Promise<{ id: string }> {
     const message: AgentMessage = {
       id: `msg_${this.messages.length + 1}`,
       content: input.content,
       createdAt: new Date(0).toISOString(),
       role: input.role,
+      toolCallId: input.toolCallId,
+      toolCalls: input.toolCalls,
+      toolName: input.toolName,
     };
     this.messages.push(message);
     return { id: message.id };
@@ -211,4 +248,50 @@ test("AgentLoop finalizes without tools after tool round limit", async () => {
   assert.equal(sessions.messages.at(-1)?.content, "基于已返回的搜索结果，这是最终回答。");
   assert.ok(sessions.statuses.includes("finalizing"));
   assert.equal(events.at(-1)?.type, "run.completed");
+});
+
+test("AgentLoop hides pre-tool narration from the visible answer", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const contextEngine = new ContextEngine({
+    assemble: () => makePrompt("pre-tool-narration-prompt"),
+  } as unknown as PromptAssembler);
+  const modelRouter = new ToolNarrationThenFinalModelRouter();
+  const sessions = new FakeSessionRepository();
+  const loop = new AgentLoop(
+    contextEngine,
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 128,
+      model: "deepseek-v4-flash",
+      runId: "run_pre_tool_narration",
+      sessionId: "sess_pre_tool_narration",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+    }),
+  );
+  const deltas = events
+    .filter((event): event is Extract<AgentEvent, { type: "assistant.delta" }> =>
+      event.type === "assistant.delta",
+    )
+    .map((event) => event.text)
+    .join("");
+  const toolCallMessage = sessions.messages.find(
+    (message) => message.role === "assistant" && message.toolCalls?.length,
+  );
+
+  assert.equal(modelRouter.calls.length, 2);
+  assert.ok(modelRouter.calls.every((toolCount) => toolCount > 0));
+  assert.equal(deltas, "这是最终回答。");
+  assert.equal(sessions.messages.at(-1)?.content, "这是最终回答。");
+  assert.equal(toolCallMessage?.content, "Let me search first.");
+  assert.doesNotMatch(deltas, /Let me search/);
 });

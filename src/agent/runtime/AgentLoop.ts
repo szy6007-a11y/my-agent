@@ -15,6 +15,7 @@ const MAX_TOOL_ROUNDS = 6;
 const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
   "工具调用轮次已经达到上限。请停止调用工具，基于上面已经返回的工具结果给出当前可支持的最终回答；如果证据不足，请说明限制和已经查到的信息。";
 const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
+const EMPTY_ASSISTANT_FALLBACK = "我没有生成有效回复，请再试一次。";
 
 function failedToolMessage(result: string): string | null {
   try {
@@ -151,12 +152,6 @@ export class AgentLoop {
 
           if (event.type === "text_delta") {
             passText += event.text;
-            visibleAssistantText += event.text;
-            yield {
-              type: "assistant.delta",
-              messageId: assistantMessageId,
-              text: event.text,
-            };
           }
 
           if (event.type === "reasoning_delta") {
@@ -182,8 +177,16 @@ export class AgentLoop {
         }
 
         if (toolCalls.length === 0) {
+          const finalText = passText.trim() ? passText : EMPTY_ASSISTANT_FALLBACK;
+          visibleAssistantText += finalText;
+          yield {
+            type: "assistant.delta",
+            messageId: assistantMessageId,
+            text: finalText,
+          };
+
           const finalMessage = await this.sessions.appendMessage({
-            content: visibleAssistantText || "我没有生成有效回复，请再试一次。",
+            content: visibleAssistantText,
             role: "assistant",
             sessionId: input.sessionId,
           });
