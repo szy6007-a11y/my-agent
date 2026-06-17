@@ -16,6 +16,7 @@ import {
   Send,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Streamdown } from "streamdown";
 
 import type {
   ServiceHealthSnapshot,
@@ -183,6 +184,29 @@ function updateMessage(
 ) {
   return messages.map((message) =>
     message.id === messageId ? { ...message, ...updates } : message,
+  );
+}
+
+function MarkdownMessage({
+  content,
+  isStreaming,
+}: {
+  content: string;
+  isStreaming: boolean;
+}) {
+  return (
+    <Streamdown
+      className="markdown-content"
+      controls={false}
+      dir="auto"
+      lineNumbers={false}
+      mode={isStreaming ? "streaming" : "static"}
+      normalizeHtmlIndentation
+      parseIncompleteMarkdown={isStreaming}
+      skipHtml
+    >
+      {content || " "}
+    </Streamdown>
   );
 }
 
@@ -942,7 +966,14 @@ export function ChatWorkspace() {
                     >
                       思考中
                     </div>
-                  : <div className="message-content">{message.content || " "}</div>}
+                  : <div className="message-content">
+                      {message.role === "assistant" ?
+                        <MarkdownMessage
+                          content={message.content}
+                          isStreaming={message.status === "streaming"}
+                        />
+                      : message.content || " "}
+                    </div>}
                   {message.role === "assistant" &&
                     message.status !== "streaming" &&
                     message.content.trim() && (

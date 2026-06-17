@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import "streamdown/styles.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

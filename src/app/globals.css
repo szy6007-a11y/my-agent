@@ -1,11 +1,19 @@
 @import "tailwindcss";
+@source "../../node_modules/streamdown/dist/*.js";
 
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
   --muted: #f4f4f4;
   --muted-strong: #e9e9e9;
+  --muted-foreground: #6f6f6f;
   --border: #e5e5e5;
+  --input: #e5e5e5;
+  --primary: #0f0f0f;
+  --primary-foreground: #ffffff;
+  --radius: 0.5rem;
   --text-muted: #6f6f6f;
   --shadow: 0 16px 36px rgba(0, 0, 0, 0.08);
 }
@@ -649,6 +657,129 @@ body > button[aria-label="Open Next.js Dev Tools"],
   min-width: 0;
   white-space: pre-wrap;
   line-height: 1.68;
+}
+
+.message.assistant .message-content {
+  white-space: normal;
+}
+
+.markdown-content {
+  min-width: 0;
+  line-height: 1.68;
+  overflow-wrap: anywhere;
+}
+
+.markdown-content > :first-child,
+.markdown-content [data-streamdown] > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child,
+.markdown-content [data-streamdown] > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content [data-streamdown="paragraph"] {
+  margin: 0 0 16px;
+}
+
+.markdown-content strong,
+.markdown-content [data-streamdown="strong"] {
+  font-weight: 720;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0 0 16px;
+  padding-left: 1.35rem;
+}
+
+.markdown-content li {
+  margin: 4px 0;
+  padding-left: 0.08rem;
+}
+
+.markdown-content li > p {
+  margin: 0;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  margin: 18px 0 8px;
+  line-height: 1.35;
+}
+
+.markdown-content h1 {
+  font-size: 1.45rem;
+}
+
+.markdown-content h2 {
+  font-size: 1.25rem;
+}
+
+.markdown-content h3 {
+  font-size: 1.08rem;
+}
+
+.markdown-content blockquote {
+  margin: 0 0 16px;
+  border-left: 3px solid var(--border);
+  color: #4f4f4f;
+  padding-left: 12px;
+}
+
+.markdown-content code {
+  border-radius: 5px;
+  background: #f1f1f1;
+  color: #202020;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  font-size: 0.92em;
+  padding: 0.13em 0.32em;
+}
+
+.markdown-content pre {
+  max-width: 100%;
+  overflow: auto;
+  border-radius: 8px;
+  background: #111111;
+  color: #f6f6f6;
+  padding: 14px;
+}
+
+.markdown-content pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  font-size: 0.95em;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--border);
+  padding: 7px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content th {
+  background: #f7f7f7;
+  font-weight: 680;
 }
 
 .message-actions {
