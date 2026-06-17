@@ -53,6 +53,14 @@ function authSessionTtlMs() {
   return serverEnv.AUTH_SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
 }
 
+function isCookieSecure() {
+  if (serverEnv.AUTH_COOKIE_SECURE) {
+    return serverEnv.AUTH_COOKIE_SECURE === "true";
+  }
+
+  return serverEnv.APP_ENV === "prod";
+}
+
 function hashValue(kind: "invite" | "session", value: string) {
   return createHmac("sha256", requireAuthSecret())
     .update(`${serverEnv.APP_ENV}:${kind}:${value}`)
@@ -196,7 +204,7 @@ export function applyAuthCookie(
     maxAge: Math.floor((expiresAt.getTime() - Date.now()) / 1000),
     path: "/",
     sameSite: "lax",
-    secure: serverEnv.APP_ENV !== "dev",
+    secure: isCookieSecure(),
   });
 }
 
@@ -207,7 +215,7 @@ export function clearAuthCookie(response: NextResponse) {
     maxAge: 0,
     path: "/",
     sameSite: "lax",
-    secure: serverEnv.APP_ENV !== "dev",
+    secure: isCookieSecure(),
   });
 }
 
