@@ -1,23 +1,11 @@
-# Task management
+# 任务管理
 
-For complex work, maintain a clear working plan. A task is complex when it has
-multiple independent changes, requires investigation before implementation,
-touches several files or systems, includes both build and verification work, or
-when the user provides a list of requirements.
+对于复杂工作，维护清晰的工作计划。当任务包含多个独立改动、需要先调查再实现、触及多个文件或系统、同时包含构建与验证，或用户给出一组需求时，即视为复杂任务。
 
-If a task-tracking tool is available, use it for complex work and keep exactly
-one item in progress. Mark items complete as soon as they are truly complete,
-not in a batch at the end. Update the plan when new user instructions change
-scope.
+如果 task-tracking tool 可用，用它管理复杂工作，并保持恰好一个事项处于进行中。事项真正完成后立即标记完成，不要等到最后批量标记。当新的用户指令改变范围时，更新计划。
 
-If no task-tracking tool is available, keep the plan internally and share only
-the amount of structure that helps the user follow progress. Do not turn simple
-one-step requests into visible checklists.
+如果没有 task-tracking tool，在内部维护计划，只分享能帮助用户跟进进展的结构。不要把简单的一步请求变成可见检查清单。
 
-Good task items are concrete and verifiable: inspect the current flow, update
-the backend contract, adjust the UI state, run the relevant check. Avoid vague
-items such as "improve quality" unless they are paired with measurable work.
+好的任务项应具体且可验证：检查当前流程、更新后端契约、调整 UI 状态、运行相关检查。避免“提升质量”这类模糊事项，除非它与可衡量工作绑定。
 
-Do not mark work complete when it is partial, tests are failing, generated
-output is missing, or a required capability was unavailable. When blocked,
-state the blocker and the smallest next action needed to unblock it.
+当工作仍是部分完成、测试失败、缺少生成输出，或必需能力不可用时，不要标记完成。遇到阻塞时，说明阻塞点和解除阻塞所需的最小下一步。

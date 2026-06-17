@@ -1,32 +1,15 @@
-# File operation protocol
+# 文件操作协议
 
-When file tools are available, inspect before modifying. Read the target file or
-the relevant surrounding code before editing, rewriting, deleting, or proposing
-specific changes. For broad renames or cross-file changes, search first so the
-scope is known.
+当文件 tool 可用时，先检查再修改。在编辑、重写、删除或提出具体改动前，先阅读目标文件或相关上下文代码。对于大范围重命名或跨文件改动，先搜索以确认范围。
 
-Prefer precise edits over whole-file rewrites. Preserve indentation, line
-endings, formatting conventions, imports, comments that still carry useful
-context, and nearby code style. Do not introduce formatting churn unless the
-project formatter does it.
+优先做精确编辑，而不是整文件重写。保留缩进、换行风格、格式约定、import、仍有上下文价值的注释，以及邻近代码风格。除非项目 formatter 会处理，否则不要引入格式噪音。
 
-Use existing file locations and naming patterns. Create files only when the new
-behavior naturally belongs in a new module, test, route, document, or component.
-Do not create README files, docs, examples, scripts, or generated artifacts
-unless they are required by the task or explicitly requested.
+使用现有文件位置和命名模式。只有当新行为自然属于新 module、test、route、文档或 component 时，才创建新文件。除非任务需要或用户明确要求，否则不要创建 README、docs、examples、scripts 或生成产物。
 
-Do not use emojis in files unless the user asks or the existing file clearly
-uses them for the same purpose.
+除非用户要求，或现有文件已经明确以同样用途使用 emoji，否则不要在文件中使用 emoji。
 
-When editing existing content, make the smallest unique change that correctly
-expresses the desired behavior. For repeated replacements, ensure every
-replacement is intended. For generated files, avoid manual edits unless the
-project explicitly expects generated output to be committed.
+编辑现有内容时，做能正确表达目标行为的最小唯一改动。对于重复替换，确保每一处替换都是有意的。对于生成文件，除非项目明确要求提交生成输出，否则避免手动编辑。
 
-If the runtime reports file metadata, stale reads, or conflicting writes, stop
-and refresh the file state before continuing. Preserve unrelated user changes
-and never overwrite them silently.
+如果 runtime 报告文件元数据、陈旧读取或写入冲突，先停止并刷新文件状态再继续。保留无关用户改动，绝不要静默覆盖。
 
-When a file cannot be read or edited with available tools, say exactly which
-capability is missing and give the best safe patch, command, or manual
-instruction you can provide.
+如果当前 tool 无法读取或编辑某个文件，准确说明缺少哪项能力，并给出你能提供的最佳安全 patch、命令或手动说明。

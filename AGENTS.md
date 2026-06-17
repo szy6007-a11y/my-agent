@@ -1,19 +1,35 @@
 # AGENTS.md
 
-This file gives Codex project-specific instructions for work inside `my-agent`.
-Keep it updated as the project grows.
+本文件为 Codex 在 `my-agent` 中工作提供项目专属约定。
+随着项目演进，请持续维护本文件。
 
-## Project Structure
+## 项目结构
 
-- `rules/`: Store project rules, prompts, checklists, and reusable agent guidance.
+- `rules/`：存放项目规则、prompt、检查清单和可复用的 Agent 指引。
 
-## Working Guidelines
+## 环境分支流程
 
-- Read relevant files before making changes.
-- Keep changes small, focused, and consistent with the existing project structure.
-- Do not remove user-created files or content unless explicitly requested.
-- Add new rules under `rules/` using clear, descriptive filenames.
-- When design documents, architecture notes, PRDs, or project rules change, check whether `AGENTS.md` should be updated so future Codex sessions inherit the new guidance.
-- Use `npm run ci` as the standard local CI command. It must pass before committing code changes.
-- After completing a feature change or bugfix, run the appropriate verification, review the diff, stage only related files, and create a focused git commit unless the user explicitly asks not to commit.
-- When adding behavior, include a brief verification note or test command when practical.
+- 本仓库使用三个环境分支：`dev`、`sit` 和 `prod`。
+- 日常代码改动只在 `dev` 上进行。
+- 开发完成后，将 `dev` 合并到 `sit` 进行 SIT 验证。
+- SIT 验证通过后，将 `sit` 合并到 `prod` 进行生产发布。
+- 除非用户明确要求紧急修复，否则不要在 `sit` 或 `prod` 上直接改代码。
+- 编辑代码前先检查当前分支。如果用户要求改代码但当前不在 `dev`，先切换到或创建 `dev`，除非用户明确要求使用其他分支。
+
+## 文档语言约定
+
+- 项目文档默认使用中文编写，包括 README、设计文档、架构说明、PRD、规则文档和 prompt 指引。
+- 只保留必要的英文术语、代码标识、命令、文件路径、API 名称、事件名、协议名和产品名。
+- 新增或更新 Markdown 文档时，先检查是否存在纯英文段落；除必要术语外，应改写为自然中文。
+- 如果外部规范、错误信息或源码标识必须引用英文，保留原文并在需要时补充中文解释。
+
+## 工作准则
+
+- 修改前先阅读相关文件。
+- 保持改动小而聚焦，并与现有项目结构一致。
+- 除非用户明确要求，不要删除用户创建的文件或内容。
+- 新规则应放在 `rules/` 下，并使用清晰、描述性的文件名。
+- 当设计文档、架构说明、PRD 或项目规则变化时，检查是否需要更新 `AGENTS.md`，让之后的 Codex 会话继承新指引。
+- 使用 `npm run ci` 作为标准本地 CI 命令。提交代码改动前必须通过。
+- 完成功能变更或 bugfix 后，运行合适的验证、检查 diff、只暂存相关文件，并创建聚焦的 git commit，除非用户明确要求不要提交。
+- 新增行为时，尽量附上简短的验证说明或测试命令。

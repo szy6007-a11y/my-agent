@@ -1,23 +1,11 @@
-# Git collaboration
+# Git 协作
 
-Use git only when a git-capable tool is available and the user or project
-context calls for it. Before committing, inspect status and diff so you
-understand exactly what will be included. Stage specific files rather than
-blanket-adding the whole worktree.
+只有在 git 能力可用，且用户或项目上下文需要时，才使用 git。提交前检查 status 和 diff，确保准确理解将包含哪些内容。应暂存具体文件，而不是一口气把整个 worktree 都加入。
 
-Do not include secrets, .env files, local caches, build artifacts, dependency
-folders, screenshots with private data, or unrelated user changes in commits.
-If unrelated changes are present, leave them alone and mention the separation
-when it matters.
+不要把密钥、`.env` 文件、本地缓存、构建产物、依赖目录、包含私密数据的截图，或无关用户改动放进 commit。如果存在无关改动，保持原样；必要时说明已分开处理。
 
-Commit messages should describe the actual user-visible or engineering change.
-Do not make empty commits, noisy formatting-only commits, or commits that mix
-unrelated tasks unless the user explicitly requests that packaging.
+Commit message 应描述实际的用户可见变更或工程变更。除非用户明确要求，不要创建空 commit、纯格式噪音 commit，或混合无关任务的 commit。
 
-Do not skip hooks or validation to force a commit through unless the user
-explicitly instructs you to do so after seeing the failure. If hooks fail,
-diagnose and fix the issue or report the blocker.
+除非用户在看到失败后明确要求，否则不要跳过 hooks 或验证来强行提交。如果 hooks 失败，诊断并修复问题，或报告阻塞点。
 
-Never run destructive git commands such as hard resets, checkout-overwrites,
-branch deletion, history rewrites, or force pushes unless the user explicitly
-requests that exact operation and the intended target is clear.
+除非用户明确要求该具体操作且目标清楚，否则绝不要运行 destructive git 命令，例如 hard reset、覆盖式 checkout、删除分支、改写历史或 force push。

@@ -1,25 +1,24 @@
 # My Agent
 
-ChatGPT-like web agent powered by DeepSeek.
+由 DeepSeek 驱动的 ChatGPT-like 网页 Agent。
 
-## Development
+## 开发
 
 ```bash
 docker compose up -d --build
 ```
 
-Open:
+打开：
 
-- Web app: <http://localhost:3000>
-- Health check: <http://localhost:3000/api/health>
+- Web app：<http://localhost:3000>
+- 健康检查：<http://localhost:3000/api/health>
 
-Configuration is kept in `.env`. Keep secrets out of source control.
+配置保存在 `.env` 中。不要把密钥提交到源码仓库。
 
-## Prototype Flow
+## 原型流程
 
-The current prototype implements the first backend milestone from
-`docs/AGENT_BACKEND_ARCHITECTURE.md`:
+当前原型实现了 `docs/AGENT_BACKEND_ARCHITECTURE.md` 中的第一个后端里程碑：
 
-- `POST /api/agent/runs` creates a session/run, persists the user message, streams DeepSeek output, stores the assistant message, and appends run events.
-- The frontend consumes normalized Agent events such as `run.accepted`, `context.built`, `assistant.delta`, `usage.updated`, and `run.completed`.
-- Tool execution, approval flows, and context compaction are intentionally left for the next milestones.
+- `POST /api/agent/runs` 创建 session/run，持久化用户消息，流式输出 DeepSeek 结果，保存 assistant 消息，并追加 run 事件。
+- 前端消费标准化的 Agent 事件，例如 `run.accepted`、`context.built`、`assistant.delta`、`usage.updated` 和 `run.completed`。
+- Tool 执行、审批流程和上下文压缩会留到后续里程碑实现。

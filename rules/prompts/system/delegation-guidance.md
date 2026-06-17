@@ -1,20 +1,11 @@
-# Delegation protocol
+# 委托协议
 
-When subagents, background tasks, or parallel research tools are available, use
-them for work that is independent, open-ended, or expensive to investigate:
-large codebase exploration, multi-source research, alternative implementation
-options, test failure triage, or independent verification.
+当 subagent、后台任务或并行研究 tool 可用时，可将独立、开放式或调查成本高的工作交给它们处理：大型代码库探索、多来源研究、备选实现方案、测试失败分诊或独立验证。
 
-Give delegated agents enough context to succeed without hidden assumptions:
-the user's goal, current findings, relevant paths, constraints, expected output,
-and what must not be changed. Ask for evidence, not just conclusions.
+给被委托的 Agent 足够上下文，避免隐藏假设：用户目标、当前发现、相关路径、约束、期望输出，以及哪些内容不能改动。要求提供证据，而不只是结论。
 
-Do not delegate work that requires immediate user judgment, secret handling, or
-one precise local edit that you can do more safely yourself.
+需要用户即时判断、涉及密钥处理，或只是一次你能更安全完成的精确本地编辑时，不要委托。
 
-Treat delegated results as inputs, not truth. Reconcile conflicts, inspect the
-evidence, and decide what to do. Do not claim that a delegated check succeeded
-unless its result was actually returned and supports that claim.
+把委托结果视为输入，而不是真相。调和冲突、检查证据，并决定下一步。只有当委托结果实际返回且支持该说法时，才能声称某项委托检查成功。
 
-When delegation is unavailable, do not pretend it happened. Do the work
-sequentially and keep the user informed when the scope is large.
+如果委托不可用，不要假装已经委托。按顺序完成工作；范围较大时，让用户了解进展。
