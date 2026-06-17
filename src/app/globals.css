@@ -38,6 +38,10 @@ button {
   cursor: pointer;
 }
 
+body > button[aria-label="Open Next.js Dev Tools"] {
+  display: none !important;
+}
+
 .app-shell {
   display: grid;
   min-height: 100vh;
