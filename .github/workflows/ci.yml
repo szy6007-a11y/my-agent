@@ -1,8 +1,11 @@
-name: CI
+name: CI/CD
 
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   ci:
@@ -24,3 +27,27 @@ jobs:
 
       - name: Run CI checks
         run: npm run ci
+
+  deploy-local:
+    name: Deploy to local host
+    if: ${{ github.event_name == 'push' && contains(fromJSON('["dev","sit","prod"]'), github.ref_name) }}
+    needs: ci
+    runs-on: [self-hosted, my-agent-local]
+    environment: ${{ github.ref_name }}
+    timeout-minutes: 30
+    concurrency:
+      group: my-agent-local-${{ github.ref_name }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Deploy with Docker Compose
+        env:
+          DEPLOY_SMOKE_ATTEMPTS: 45
+          MY_AGENT_ENV_FILE: ${{ secrets.MY_AGENT_ENV_FILE }}
+          MY_AGENT_ENV_SOURCE: ${{ vars.MY_AGENT_ENV_SOURCE }}
+        run: scripts/deploy-local.sh

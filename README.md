@@ -15,6 +15,12 @@ docker compose up -d --build
 
 配置保存在 `.env` 中。不要把密钥提交到源码仓库。
 
+## CI/CD
+
+代码远端托管在 `git@github.com:szy6007-a11y/my-agent.git`。push 到 `dev`、`sit` 或 `prod` 后，GitHub Actions 会先运行 CI；CI 通过后，由本机的 GitHub self-hosted runner 执行 Docker Compose 部署。
+
+部署细节见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+
 ## 原型流程
 
 当前原型实现了 `docs/AGENT_BACKEND_ARCHITECTURE.md` 中的第一个后端里程碑：
