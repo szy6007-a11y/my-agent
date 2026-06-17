@@ -58,5 +58,13 @@ export type AgentRunRequest = {
 export type ContextSnapshot = {
   id: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  promptSections: Array<{
+    content: string;
+    source: string;
+    status?: string;
+    tag: string;
+    tier: "stable" | "context" | "volatile";
+  }>;
+  promptTiers: Record<"stable" | "context" | "volatile", string>;
   tokenEstimate: number;
 };

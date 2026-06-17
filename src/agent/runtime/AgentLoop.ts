@@ -27,7 +27,12 @@ export class AgentLoop {
     yield { type: "run.started", runId: input.runId };
 
     const history = await this.sessions.listMessages(input.sessionId);
-    const context = this.contextEngine.build({ messages: history });
+    const context = this.contextEngine.build({
+      messages: history,
+      model: input.model,
+      provider: "deepseek",
+      sessionId: input.sessionId,
+    });
     yield {
       type: "context.built",
       snapshotId: context.id,
