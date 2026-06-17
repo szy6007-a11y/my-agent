@@ -240,7 +240,6 @@ export function loadProjectContextFiles(cwd = process.cwd()): LoadedContextFile[
   const resolvedCwd = resolve(cwd);
   const projectContext =
     loadHermesMd(resolvedCwd) ??
-    loadNamedContextFile(resolvedCwd, ["AGENTS.md", "agents.md"]) ??
     loadNamedContextFile(resolvedCwd, ["CLAUDE.md", "claude.md"]) ??
     loadCursorRules(resolvedCwd);
 

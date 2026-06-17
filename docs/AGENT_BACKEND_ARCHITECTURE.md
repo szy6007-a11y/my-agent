@@ -364,7 +364,7 @@ MVP 默认：
 Context Engine 决定模型看到的全部内容。建议分层：
 
 1. `stable`：基础系统提示、Agent 行为规范、工具使用原则、安全规则。
-2. `workspace`：`AGENTS.md`、`CLAUDE.md`、`SOUL.md`、项目规则、当前 cwd。
+2. `workspace`：`.hermes.md` / `HERMES.md`、`CLAUDE.md`、`.cursorrules`、项目规则、当前 cwd。`AGENTS.md` 是本仓库开发协作指令，不注入产品 Agent 的 system prompt。
 3. `skills`：技能索引，只放名称/描述/路径；完整技能按需用 `skill_view/read` 加载。
 4. `memory`：长期记忆、用户偏好、项目摘要。
 5. `history`：会话消息、工具调用、最近结果。
@@ -714,7 +714,7 @@ MVP API：
 
 ### Milestone 4：上下文与压缩
 
-- 加载 `AGENTS.md`、`CLAUDE.md`、项目规则。
+- 加载 `.hermes.md` / `HERMES.md`、`CLAUDE.md`、`.cursorrules`、项目规则；不加载 `AGENTS.md`。
 - 实现 ContextSnapshot、token budget、tool result pruning。
 - 实现手动 `/compact` 和 auto compaction。
 
@@ -748,4 +748,3 @@ MVP API：
 - MCP 是工具来源之一，不绕过权限系统。
 - 子 Agent 是独立 run/session，不把全部子历史塞回父上下文。
 - Prompt/Tool/Policy 变更要版本化并进入评测。
-

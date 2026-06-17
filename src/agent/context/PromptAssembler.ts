@@ -166,7 +166,7 @@ function buildProjectContextSection(cwd: string): PromptSection {
   if (files.length === 0) {
     return {
       content:
-        "No project context file was loaded. Discovery checked .hermes.md/HERMES.md up to the git root, then AGENTS.md, CLAUDE.md, .cursorrules, and .cursor/rules/*.mdc in the current working directory.",
+        "No project context file was loaded. Discovery checked .hermes.md/HERMES.md up to the git root, then CLAUDE.md, .cursorrules, and .cursor/rules/*.mdc in the current working directory. AGENTS.md is intentionally excluded because it contains development instructions for this repository, not product-agent context.",
       source: cwd,
       status: "empty",
       tag: "project_context",
