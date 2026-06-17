@@ -192,6 +192,7 @@ export function ChatWorkspace() {
   const [appEnvironment, setAppEnvironment] =
     useState<AuthUser["environment"]>("dev");
   const [inviteCode, setInviteCode] = useState("");
+  const [userIdentifier, setUserIdentifier] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -400,7 +401,8 @@ export function ChatWorkspace() {
     event.preventDefault();
 
     const code = inviteCode.trim();
-    if (!code || isLoggingIn) {
+    const loginId = userIdentifier.trim();
+    if (!code || !loginId || isLoggingIn) {
       return;
     }
 
@@ -414,6 +416,7 @@ export function ChatWorkspace() {
         body: JSON.stringify({
           displayName: displayName.trim() || undefined,
           inviteCode: code,
+          userIdentifier: loginId,
         }),
       });
 
@@ -434,6 +437,7 @@ export function ChatWorkspace() {
       setAuthUser(body.user);
       setAuthStatus("authenticated");
       setInviteCode("");
+      setUserIdentifier("");
       setDisplayName("");
       clearWorkspace();
       await refreshSessions();
@@ -750,6 +754,16 @@ export function ChatWorkspace() {
               placeholder="输入内测码"
               type="password"
               value={inviteCode}
+            />
+          </label>
+          <label className="auth-field">
+            <span>用户 ID</span>
+            <input
+              autoComplete="username"
+              onChange={(event) => setUserIdentifier(event.target.value)}
+              placeholder="用于区分历史对话"
+              type="text"
+              value={userIdentifier}
             />
           </label>
           <label className="auth-field">

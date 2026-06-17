@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 const loginSchema = z.object({
   displayName: z.string().trim().max(80).optional(),
   inviteCode: z.string().trim().min(1).max(160),
+  userIdentifier: z.string().trim().min(1).max(120),
 });
 
 export async function POST(request: NextRequest) {
@@ -21,6 +22,7 @@ export async function POST(request: NextRequest) {
     code: body.inviteCode,
     displayName: body.displayName,
     loginBucket: getClientBucket(request),
+    userIdentifier: body.userIdentifier,
     userAgent: request.headers.get("user-agent"),
   });
 

@@ -12,6 +12,7 @@ type AuthUserRow = {
   id: string;
   environment: "dev" | "sit" | "prod";
   display_name: string | null;
+  login_id_hash: string;
   created_at: Date;
   last_seen_at: Date | null;
 };
@@ -61,10 +62,14 @@ function isCookieSecure() {
   return serverEnv.APP_ENV === "prod";
 }
 
-function hashValue(kind: "invite" | "session", value: string) {
+function hashValue(kind: "invite" | "login" | "session", value: string) {
   return createHmac("sha256", requireAuthSecret())
     .update(`${serverEnv.APP_ENV}:${kind}:${value}`)
     .digest("hex");
+}
+
+function normalizeUserIdentifier(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function timingSafeHexEqual(a: string, b: string) {
@@ -100,12 +105,33 @@ async function ensureAuthSchema() {
       id text primary key,
       environment text not null,
       invite_code_hash text not null,
+      login_id_hash text,
       display_name text,
       status text not null default 'active',
       created_at timestamptz not null default now(),
-      last_seen_at timestamptz not null default now(),
-      unique (environment, invite_code_hash)
+      last_seen_at timestamptz not null default now()
     )
+  `;
+
+  await db`
+    alter table beta_users
+    add column if not exists login_id_hash text
+  `;
+
+  await db`
+    update beta_users
+    set login_id_hash = md5(${serverEnv.APP_ENV} || ':legacy-login:' || id)
+    where login_id_hash is null
+  `;
+
+  await db`
+    alter table beta_users
+    alter column login_id_hash set not null
+  `;
+
+  await db`
+    alter table beta_users
+    drop constraint if exists beta_users_environment_invite_code_hash_key
   `;
 
   await db`
@@ -136,6 +162,11 @@ async function ensureAuthSchema() {
   await db`
     create index if not exists auth_sessions_environment_token_idx
     on auth_sessions(environment, token_hash)
+  `;
+
+  await db`
+    create unique index if not exists beta_users_environment_login_id_hash_idx
+    on beta_users(environment, login_id_hash)
   `;
 
   await db`
@@ -223,6 +254,7 @@ export async function signInWithInviteCode(input: {
   code: string;
   displayName?: string | null;
   loginBucket: string;
+  userIdentifier: string;
   userAgent?: string | null;
 }) {
   if (!isAuthConfigured()) {
@@ -239,7 +271,9 @@ export async function signInWithInviteCode(input: {
     } as const;
   }
 
+  const normalizedUserIdentifier = normalizeUserIdentifier(input.userIdentifier);
   const candidateHash = hashValue("invite", input.code.trim());
+  const loginIdHash = hashValue("login", normalizedUserIdentifier);
   const hasMatchingInviteCode = configuredInviteHashes().some((allowedHash) =>
     timingSafeHexEqual(candidateHash, allowedHash),
   );
@@ -261,6 +295,7 @@ export async function signInWithInviteCode(input: {
       id,
       environment,
       invite_code_hash,
+      login_id_hash,
       display_name,
       last_seen_at
     )
@@ -268,14 +303,16 @@ export async function signInWithInviteCode(input: {
       ${`usr_${randomUUID()}`},
       ${serverEnv.APP_ENV},
       ${candidateHash},
+      ${loginIdHash},
       ${displayName},
       now()
     )
-    on conflict (environment, invite_code_hash)
+    on conflict (environment, login_id_hash)
     do update set
+      invite_code_hash = ${candidateHash},
       display_name = coalesce(${displayName}, beta_users.display_name),
       last_seen_at = now()
-    returning id, environment, display_name, created_at, last_seen_at
+    returning id, environment, display_name, login_id_hash, created_at, last_seen_at
   `;
 
   const token = randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
@@ -331,6 +368,7 @@ export async function getAuthenticatedUser(
       u.id,
       u.environment,
       u.display_name,
+      u.login_id_hash,
       u.created_at,
       u.last_seen_at,
       s.id as session_id,
