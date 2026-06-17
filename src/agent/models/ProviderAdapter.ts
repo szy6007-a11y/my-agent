@@ -9,8 +9,11 @@ export type ModelStreamInput = {
   model: string;
   context: ContextSnapshot;
   maxTokens: number;
+  runId: string;
+  sessionId: string;
   thinking: "enabled" | "disabled";
   signal: AbortSignal;
+  userId: string;
 };
 
 export interface ProviderAdapter {

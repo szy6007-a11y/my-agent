@@ -59,6 +59,7 @@ export class RunController {
       sessionId: session.id,
       signal,
       thinking,
+      userId: LOCAL_USER_ID,
     })) {
       yield* this.emit(run.id, event);
     }

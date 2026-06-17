@@ -20,6 +20,7 @@ export class AgentLoop {
     sessionId: string;
     model: string;
     maxTokens: number;
+    userId: string;
     thinking: "enabled" | "disabled";
     signal: AbortSignal;
   }): AsyncGenerator<AgentEvent> {
@@ -47,8 +48,11 @@ export class AgentLoop {
         context,
         maxTokens: input.maxTokens,
         model: input.model,
+        runId: input.runId,
         signal: input.signal,
+        sessionId: input.sessionId,
         thinking: input.thinking,
+        userId: input.userId,
       })) {
         if (input.signal.aborted) {
           await this.sessions.updateRunStatus(input.runId, "aborted");
