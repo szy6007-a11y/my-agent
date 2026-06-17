@@ -88,7 +88,7 @@ type ServiceLogEvent = {
 
 const MAX_CONSOLE_LOGS = 28;
 const SCROLL_BOTTOM_FALLBACK_THRESHOLD = 96;
-const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px 96px 0px";
+const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px -96px 0px";
 
 function parseSseEvent(eventText: string): AgentEvent | null {
   const dataLines = eventText
@@ -253,8 +253,11 @@ export function ChatWorkspace() {
   const [consoleLogs, setConsoleLogs] = useState<ServiceConsoleLog[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
+  const isAtBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${shortSessionId(sessionId)}` : "尚未创建会话"),
     [sessionId],
@@ -288,29 +291,54 @@ export function ChatWorkspace() {
 
   const updateBottomState = useCallback(
     (isAtBottom: boolean) => {
-      autoScrollRef.current = isAtBottom;
+      isAtBottomRef.current = isAtBottom;
+      if (isAtBottom) {
+        autoScrollRef.current = true;
+      }
       setShowScrollToBottom(messages.length > 0 && !isAtBottom);
     },
     [messages.length],
   );
+
+  const markManualScrollAway = useCallback(() => {
+    const element = messagesRef.current;
+
+    if (messages.length === 0 || !element || element.scrollTop <= 0) {
+      return;
+    }
+
+    autoScrollRef.current = false;
+    setShowScrollToBottom(true);
+  }, [messages.length]);
 
   const updateScrollStateFromDistance = useCallback(() => {
     const element = messagesRef.current;
 
     if (!element || messages.length === 0) {
       autoScrollRef.current = true;
+      isAtBottomRef.current = true;
+      lastScrollTopRef.current = 0;
       setShowScrollToBottom(false);
       return;
     }
 
+    const previousScrollTop = lastScrollTopRef.current;
+    const nextScrollTop = element.scrollTop;
     const distanceToBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight;
+      element.scrollHeight - nextScrollTop - element.clientHeight;
+    const isAtBottom = distanceToBottom <= SCROLL_BOTTOM_FALLBACK_THRESHOLD;
 
-    updateBottomState(distanceToBottom <= SCROLL_BOTTOM_FALLBACK_THRESHOLD);
+    updateBottomState(isAtBottom);
+    if (!isAtBottom && nextScrollTop < previousScrollTop - 2) {
+      autoScrollRef.current = false;
+      setShowScrollToBottom(true);
+    }
+    lastScrollTopRef.current = nextScrollTop;
   }, [messages.length, updateBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     autoScrollRef.current = true;
+    isAtBottomRef.current = true;
     messagesEndRef.current?.scrollIntoView({
       block: "end",
       behavior,
@@ -326,6 +354,8 @@ export function ChatWorkspace() {
     setMonitorConnection("connecting");
     setServiceSnapshot(null);
     autoScrollRef.current = true;
+    isAtBottomRef.current = true;
+    lastScrollTopRef.current = 0;
     setShowScrollToBottom(false);
   }, []);
 
@@ -364,13 +394,12 @@ export function ChatWorkspace() {
     }
 
     const target = messagesEndRef.current;
+    updateScrollStateFromDistance();
+    element.addEventListener("scroll", updateScrollStateFromDistance, {
+      passive: true,
+    });
 
     if (!target || !("IntersectionObserver" in window)) {
-      updateScrollStateFromDistance();
-      element.addEventListener("scroll", updateScrollStateFromDistance, {
-        passive: true,
-      });
-
       return () => {
         element.removeEventListener("scroll", updateScrollStateFromDistance);
       };
@@ -395,6 +424,7 @@ export function ChatWorkspace() {
 
     return () => {
       observer.disconnect();
+      element.removeEventListener("scroll", updateScrollStateFromDistance);
     };
   }, [updateBottomState, updateScrollStateFromDistance]);
 
@@ -595,6 +625,8 @@ export function ChatWorkspace() {
   function startNewChat() {
     stopStreaming();
     autoScrollRef.current = true;
+    isAtBottomRef.current = true;
+    lastScrollTopRef.current = 0;
     setMessages([]);
     setSessionId(null);
     setShowScrollToBottom(false);
@@ -632,6 +664,8 @@ export function ChatWorkspace() {
 
       setSessionId(nextSessionId);
       autoScrollRef.current = true;
+      isAtBottomRef.current = true;
+      lastScrollTopRef.current = 0;
       setMessages(
         body.messages.map((message) => ({
           content: message.content,
@@ -675,6 +709,7 @@ export function ChatWorkspace() {
 
     setInput("");
     autoScrollRef.current = true;
+    isAtBottomRef.current = true;
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setIsStreaming(true);
 
@@ -1063,7 +1098,29 @@ export function ChatWorkspace() {
       </aside>
 
       <section className="workspace">
-        <div className="messages" aria-live="polite" ref={messagesRef}>
+        <div
+          className="messages"
+          aria-live="polite"
+          onTouchMove={(event) => {
+            const touchStartY = touchStartYRef.current;
+            if (touchStartY === null) {
+              return;
+            }
+
+            if (event.touches[0]?.clientY - touchStartY > 4) {
+              markManualScrollAway();
+            }
+          }}
+          onTouchStart={(event) => {
+            touchStartYRef.current = event.touches[0]?.clientY ?? null;
+          }}
+          onWheel={(event) => {
+            if (event.deltaY < 0) {
+              markManualScrollAway();
+            }
+          }}
+          ref={messagesRef}
+        >
           {messages.length === 0 ? (
             <div className="empty-state">
               <h1>今天想做什么？</h1>
