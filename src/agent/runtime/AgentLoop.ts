@@ -49,9 +49,27 @@ export class AgentLoop {
     const history = await this.sessions.listMessages(input.sessionId, {
       userId: input.userId,
     });
+    const storedPromptSnapshot = await this.sessions.getPromptSnapshot({
+      sessionId: input.sessionId,
+      userId: input.userId,
+    });
+    const promptSnapshot =
+      storedPromptSnapshot ??
+      (await this.sessions.savePromptSnapshotIfAbsent({
+        sessionId: input.sessionId,
+        snapshot: this.contextEngine.assemblePrompt({
+          availableTools: tools.names,
+          model: input.model,
+          provider: "deepseek",
+          sessionId: input.sessionId,
+          userId: input.userId,
+        }),
+        userId: input.userId,
+      }));
     const context = this.contextEngine.build({
       messages: history,
       model: input.model,
+      promptSnapshot,
       provider: "deepseek",
       sessionId: input.sessionId,
       userId: input.userId,

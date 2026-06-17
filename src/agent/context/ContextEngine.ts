@@ -1,15 +1,26 @@
 import { randomUUID } from "crypto";
 
-import { PromptAssembler } from "@/agent/context/PromptAssembler";
+import { PromptAssembler, type PromptAssembly } from "@/agent/context/PromptAssembler";
 import type { AgentMessage, ContextSnapshot } from "@/agent/runtime/types";
 
 export class ContextEngine {
   constructor(private readonly promptAssembler = new PromptAssembler()) {}
 
+  assemblePrompt(input: {
+    availableTools?: string[];
+    model?: string;
+    provider?: string;
+    sessionId?: string;
+    userId?: string;
+  }): PromptAssembly {
+    return this.promptAssembler.assemble(input);
+  }
+
   build(input: {
     availableTools?: string[];
     messages: AgentMessage[];
     model?: string;
+    promptSnapshot?: PromptAssembly;
     provider?: string;
     sessionId?: string;
     userId?: string;
@@ -28,13 +39,15 @@ export class ContextEngine {
         content: message.content,
       }));
 
-    const systemPrompt = this.promptAssembler.assemble({
-      availableTools: input.availableTools,
-      model: input.model,
-      provider: input.provider,
-      sessionId: input.sessionId,
-      userId: input.userId,
-    });
+    const systemPrompt =
+      input.promptSnapshot ??
+      this.assemblePrompt({
+        availableTools: input.availableTools,
+        model: input.model,
+        provider: input.provider,
+        sessionId: input.sessionId,
+        userId: input.userId,
+      });
 
     const messages = [
       { role: "system" as const, content: systemPrompt.prompt },

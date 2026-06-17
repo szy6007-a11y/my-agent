@@ -8,6 +8,7 @@ import type {
   ModelToolCall,
   RunStatus,
 } from "@/agent/runtime/types";
+import type { PromptAssembly } from "@/agent/context/PromptAssembler";
 import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 
@@ -47,6 +48,10 @@ type StoredSessionRow = {
   created_at: Date;
   updated_at: Date;
   message_count: number;
+};
+
+type PromptSnapshotRow = {
+  prompt_snapshot_json: unknown;
 };
 
 export type StoredChatSession = {
@@ -185,6 +190,16 @@ async function ensureSchema() {
   `;
 
   await db`
+    alter table sessions
+    add column if not exists prompt_snapshot_json jsonb
+  `;
+
+  await db`
+    alter table sessions
+    add column if not exists prompt_snapshot_created_at timestamptz
+  `;
+
+  await db`
     create index if not exists messages_session_created_idx
     on messages(session_id, created_at)
   `;
@@ -219,6 +234,27 @@ async function ready() {
 
 function toJson(value: unknown): postgres.JSONValue {
   return JSON.parse(JSON.stringify(value)) as postgres.JSONValue;
+}
+
+function isPromptAssembly(value: unknown): value is PromptAssembly {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<PromptAssembly>;
+  return (
+    typeof candidate.prompt === "string" &&
+    Array.isArray(candidate.sections) &&
+    Boolean(candidate.tiers) &&
+    typeof candidate.tiers === "object" &&
+    typeof candidate.tiers.stable === "string" &&
+    typeof candidate.tiers.context === "string" &&
+    typeof candidate.tiers.volatile === "string"
+  );
+}
+
+function toPromptAssembly(value: unknown): PromptAssembly | null {
+  return isPromptAssembly(value) ? value : null;
 }
 
 function contentText(row: StoredMessageRow): string {
@@ -309,6 +345,53 @@ export class SessionRepository {
     `;
 
     return rows[0] ?? null;
+  }
+
+  async getPromptSnapshot(input: {
+    sessionId: string;
+    userId: string;
+  }): Promise<PromptAssembly | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<PromptSnapshotRow[]>`
+      select prompt_snapshot_json
+      from sessions
+      where id = ${input.sessionId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      limit 1
+    `;
+
+    return toPromptAssembly(rows[0]?.prompt_snapshot_json);
+  }
+
+  async savePromptSnapshotIfAbsent(input: {
+    sessionId: string;
+    snapshot: PromptAssembly;
+    userId: string;
+  }): Promise<PromptAssembly> {
+    await ready();
+    const db = getSql();
+    const rows = await db<PromptSnapshotRow[]>`
+      update sessions
+      set
+        prompt_snapshot_json = coalesce(
+          prompt_snapshot_json,
+          ${db.json(toJson(input.snapshot))}
+        ),
+        prompt_snapshot_created_at = coalesce(prompt_snapshot_created_at, now())
+      where id = ${input.sessionId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      returning prompt_snapshot_json
+    `;
+    const snapshot = toPromptAssembly(rows[0]?.prompt_snapshot_json);
+
+    if (!snapshot) {
+      throw new Error("Session not found or prompt snapshot could not be saved");
+    }
+
+    return snapshot;
   }
 
   async listSessions(userId: string, limit = 50): Promise<StoredChatSession[]> {
