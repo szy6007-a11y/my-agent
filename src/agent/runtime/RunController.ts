@@ -6,8 +6,6 @@ import {
 } from "@/agent/sessions/SessionRepository";
 import { deepseekModels } from "@/lib/ai/deepseek";
 
-const LOCAL_USER_ID = "local-dev-user";
-
 function titleFromMessage(message: string) {
   const title = message.trim().replace(/\s+/g, " ").slice(0, 32);
   return title || "新会话";
@@ -22,6 +20,7 @@ export class RunController {
   async *startRun(
     request: AgentRunRequest,
     signal: AbortSignal,
+    userId: string,
   ): AsyncGenerator<AgentEvent> {
     const model = request.model ?? deepseekModels.default;
     const permissionMode = request.permissionMode ?? "ask-on-write";
@@ -30,13 +29,17 @@ export class RunController {
 
     const session =
       request.sessionId ?
-        { id: request.sessionId }
+        await this.sessions.getSessionForUser(request.sessionId, userId)
       : await this.sessions.createSession({
           title: titleFromMessage(request.message),
-          userId: LOCAL_USER_ID,
+          userId,
         });
 
-    await this.sessions.touchSession(session.id);
+    if (!session) {
+      throw new Error("Session not found");
+    }
+
+    await this.sessions.touchSession(session.id, userId);
     await this.sessions.appendMessage({
       content: request.message,
       role: "user",
@@ -47,7 +50,7 @@ export class RunController {
       model,
       permissionMode,
       sessionId: session.id,
-      userId: LOCAL_USER_ID,
+      userId,
     });
 
     yield* this.emit(run.id, { type: "run.accepted", runId: run.id, sessionId: session.id });
@@ -59,7 +62,7 @@ export class RunController {
       sessionId: session.id,
       signal,
       thinking,
-      userId: LOCAL_USER_ID,
+      userId,
     })) {
       yield* this.emit(run.id, event);
     }

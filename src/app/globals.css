@@ -29,6 +29,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -36,6 +37,107 @@ textarea {
 button {
   border: 0;
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+input {
+  border: 0;
+}
+
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: #ffffff;
+  padding: 24px;
+}
+
+.auth-panel {
+  display: grid;
+  width: min(360px, 100%);
+  gap: 16px;
+}
+
+.auth-kicker {
+  width: fit-content;
+  border-radius: 999px;
+  background: #0f0f0f;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0;
+  padding: 5px 9px;
+}
+
+.auth-panel h1 {
+  margin: 0 0 2px;
+  color: #111111;
+  font-size: 30px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.auth-field {
+  display: grid;
+  gap: 7px;
+  color: #303030;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-field input {
+  width: 100%;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--foreground);
+  outline: 0;
+  padding: 0 12px;
+}
+
+.auth-field input:focus {
+  border-color: #8b8b8b;
+}
+
+.auth-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.auth-submit {
+  height: 42px;
+  border-radius: 8px;
+  background: #0f0f0f;
+  color: #ffffff;
+  font-weight: 680;
+}
+
+.auth-submit:disabled {
+  background: #8f8f8f;
+}
+
+.auth-loading {
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ededed;
+}
+
+.auth-loading::before {
+  display: block;
+  width: 38%;
+  height: 100%;
+  animation: auth-loading 1.1s ease-in-out infinite;
+  border-radius: inherit;
+  background: #0f0f0f;
+  content: "";
 }
 
 body > button[aria-label="Open Next.js Dev Tools"],
@@ -128,13 +230,36 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .chat-link {
-  display: block;
+  display: grid;
+  height: auto;
+  min-height: 48px;
+  gap: 3px;
+  justify-content: stretch;
+  padding: 7px 9px;
   font-size: 14px;
 }
 
-.chat-link svg {
-  margin-right: 8px;
-  vertical-align: -2px;
+.chat-link.active {
+  background: #ededed;
+}
+
+.chat-link strong,
+.chat-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-link strong {
+  color: #282828;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.chat-link span {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .sidebar-state {
@@ -378,6 +503,10 @@ body > button[aria-label="Open Next.js Dev Tools"],
   gap: 10px;
 }
 
+.account-logout {
+  margin-left: auto;
+}
+
 .account-details {
   display: grid;
   min-width: 0;
@@ -599,6 +728,16 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
   to {
     background-position: -120% 0;
+  }
+}
+
+@keyframes auth-loading {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(265%);
   }
 }
 

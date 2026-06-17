@@ -3,6 +3,7 @@ import type OpenAI from "openai";
 import { z } from "zod";
 
 import * as deepseekModule from "@/lib/ai/deepseek";
+import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -44,6 +45,18 @@ function sse(event: string, data: unknown) {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await getAuthenticatedUser(request);
+
+  if (!auth) {
+    return Response.json(
+      {
+        error: "未登录",
+        environment: getAuthEnvironment(),
+      },
+      { status: 401 },
+    );
+  }
+
   const body = requestSchema.parse(await request.json());
   const encoder = new TextEncoder();
 

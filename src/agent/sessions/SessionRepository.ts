@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
-import postgres, { type Sql } from "postgres";
+import postgres from "postgres";
 
 import type { AgentEvent, AgentMessage, RunStatus } from "@/agent/runtime/types";
+import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 
 type StoredMessageRow = {
@@ -12,21 +13,25 @@ type StoredMessageRow = {
   created_at: Date;
 };
 
-let sql: Sql | null = null;
+type StoredSessionRow = {
+  id: string;
+  title: string;
+  status: string;
+  created_at: Date;
+  updated_at: Date;
+  message_count: number;
+};
+
+export type StoredChatSession = {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
 let schemaPromise: Promise<void> | null = null;
-
-function getSql() {
-  if (!serverEnv.DATABASE_URL) {
-    throw new Error("DATABASE_URL is required for agent persistence");
-  }
-
-  sql ??= postgres(serverEnv.DATABASE_URL, {
-    max: 5,
-    onnotice: () => undefined,
-  });
-
-  return sql;
-}
 
 async function ensureSchema() {
   const db = getSql();
@@ -34,6 +39,7 @@ async function ensureSchema() {
   await db`
     create table if not exists sessions (
       id text primary key,
+      environment text not null,
       user_id text not null,
       title text not null,
       status text not null default 'active',
@@ -57,6 +63,7 @@ async function ensureSchema() {
   await db`
     create table if not exists agent_runs (
       id text primary key,
+      environment text not null,
       session_id text not null references sessions(id) on delete cascade,
       user_id text not null,
       status text not null,
@@ -80,6 +87,38 @@ async function ensureSchema() {
   `;
 
   await db`
+    alter table sessions
+    add column if not exists environment text
+  `;
+
+  await db`
+    update sessions
+    set environment = ${serverEnv.APP_ENV}
+    where environment is null
+  `;
+
+  await db`
+    alter table sessions
+    alter column environment set not null
+  `;
+
+  await db`
+    alter table agent_runs
+    add column if not exists environment text
+  `;
+
+  await db`
+    update agent_runs
+    set environment = ${serverEnv.APP_ENV}
+    where environment is null
+  `;
+
+  await db`
+    alter table agent_runs
+    alter column environment set not null
+  `;
+
+  await db`
     create index if not exists messages_session_created_idx
     on messages(session_id, created_at)
   `;
@@ -87,6 +126,16 @@ async function ensureSchema() {
   await db`
     create index if not exists run_events_run_created_idx
     on run_events(run_id, created_at)
+  `;
+
+  await db`
+    create index if not exists sessions_environment_user_updated_idx
+    on sessions(environment, user_id, updated_at desc)
+  `;
+
+  await db`
+    create index if not exists agent_runs_environment_session_created_idx
+    on agent_runs(environment, session_id, created_at desc)
   `;
 }
 
@@ -106,14 +155,59 @@ export class SessionRepository {
     const id = `sess_${randomUUID()}`;
 
     await db`
-      insert into sessions (id, user_id, title)
-      values (${id}, ${input.userId}, ${input.title})
+      insert into sessions (id, environment, user_id, title)
+      values (${id}, ${serverEnv.APP_ENV}, ${input.userId}, ${input.title})
     `;
 
     return { id };
   }
 
-  async touchSession(sessionId: string, title?: string) {
+  async getSessionForUser(sessionId: string, userId: string) {
+    await ready();
+    const db = getSql();
+    const rows = await db<{ id: string; title: string }[]>`
+      select id, title
+      from sessions
+      where id = ${sessionId}
+        and user_id = ${userId}
+        and environment = ${serverEnv.APP_ENV}
+      limit 1
+    `;
+
+    return rows[0] ?? null;
+  }
+
+  async listSessions(userId: string, limit = 50): Promise<StoredChatSession[]> {
+    await ready();
+    const db = getSql();
+    const rows = await db<StoredSessionRow[]>`
+      select
+        s.id,
+        s.title,
+        s.status,
+        s.created_at,
+        s.updated_at,
+        count(m.id)::int as message_count
+      from sessions s
+      left join messages m on m.session_id = s.id
+      where s.user_id = ${userId}
+        and s.environment = ${serverEnv.APP_ENV}
+      group by s.id
+      order by s.updated_at desc
+      limit ${limit}
+    `;
+
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      messageCount: row.message_count,
+    }));
+  }
+
+  async touchSession(sessionId: string, userId: string, title?: string) {
     await ready();
     const db = getSql();
 
@@ -122,6 +216,8 @@ export class SessionRepository {
         update sessions
         set title = ${title}, updated_at = now()
         where id = ${sessionId}
+          and user_id = ${userId}
+          and environment = ${serverEnv.APP_ENV}
       `;
       return;
     }
@@ -130,6 +226,8 @@ export class SessionRepository {
       update sessions
       set updated_at = now()
       where id = ${sessionId}
+        and user_id = ${userId}
+        and environment = ${serverEnv.APP_ENV}
     `;
   }
 
@@ -157,14 +255,25 @@ export class SessionRepository {
     return { id };
   }
 
-  async listMessages(sessionId: string, limit = 40): Promise<AgentMessage[]> {
+  async listMessages(
+    sessionId: string,
+    input: { userId?: string; limit?: number } = {},
+  ): Promise<AgentMessage[]> {
     await ready();
     const db = getSql();
+    const limit = input.limit ?? 40;
     const rows = await db<StoredMessageRow[]>`
-      select id, role, content_json, tool_call_id, created_at
-      from messages
-      where session_id = ${sessionId}
-      order by created_at desc
+      select m.id, m.role, m.content_json, m.tool_call_id, m.created_at
+      from messages m
+      join sessions s on s.id = m.session_id
+      where m.session_id = ${sessionId}
+        and s.environment = ${serverEnv.APP_ENV}
+        ${
+          input.userId ?
+            db`and s.user_id = ${input.userId}`
+          : db``
+        }
+      order by m.created_at desc
       limit ${limit}
     `;
 
@@ -190,9 +299,18 @@ export class SessionRepository {
     const id = `run_${randomUUID()}`;
 
     await db`
-      insert into agent_runs (id, session_id, user_id, status, model, permission_mode)
+      insert into agent_runs (
+        id,
+        environment,
+        session_id,
+        user_id,
+        status,
+        model,
+        permission_mode
+      )
       values (
         ${id},
+        ${serverEnv.APP_ENV},
         ${input.sessionId},
         ${input.userId},
         'queued',
@@ -222,6 +340,7 @@ export class SessionRepository {
         end,
         error_json = ${error ? db.json(toJson(error)) : null}
       where id = ${runId}
+        and environment = ${serverEnv.APP_ENV}
     `;
   }
 
@@ -231,7 +350,10 @@ export class SessionRepository {
 
     await db`
       insert into run_events (run_id, type, payload_json)
-      values (${runId}, ${event.type}, ${db.json(toJson(event))})
+      select id, ${event.type}, ${db.json(toJson(event))}
+      from agent_runs
+      where id = ${runId}
+        and environment = ${serverEnv.APP_ENV}
     `;
   }
 }

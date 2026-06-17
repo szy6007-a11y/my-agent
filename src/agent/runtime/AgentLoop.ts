@@ -27,7 +27,9 @@ export class AgentLoop {
     await this.sessions.updateRunStatus(input.runId, "streaming_model");
     yield { type: "run.started", runId: input.runId };
 
-    const history = await this.sessions.listMessages(input.sessionId);
+    const history = await this.sessions.listMessages(input.sessionId, {
+      userId: input.userId,
+    });
     const context = this.contextEngine.build({
       messages: history,
       model: input.model,

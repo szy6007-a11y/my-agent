@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { serverEnv } from "@/lib/env";
+import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
 import {
   HEALTH_MONITOR_INTERVAL_MS,
   getServiceHealthSnapshot,
@@ -8,7 +9,19 @@ import {
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await getAuthenticatedUser(request);
+
+  if (!auth) {
+    return NextResponse.json(
+      {
+        error: "未登录",
+        environment: getAuthEnvironment(),
+      },
+      { status: 401 },
+    );
+  }
+
   const snapshot = getServiceHealthSnapshot();
   const findService = (id: string) =>
     snapshot.services.find((service) => service.id === id);

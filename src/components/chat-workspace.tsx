@@ -5,6 +5,7 @@ import {
   Check,
   CircleStop,
   Copy,
+  LogOut,
   Library,
   Mic,
   MoreHorizontal,
@@ -27,6 +28,23 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   status?: "streaming" | "complete" | "failed" | "aborted";
+};
+
+type AuthUser = {
+  id: string;
+  environment: "dev" | "sit" | "prod";
+  displayName: string | null;
+};
+
+type AuthStatus = "checking" | "anonymous" | "authenticated";
+
+type ChatSession = {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
 };
 
 type AgentEvent =
@@ -92,12 +110,36 @@ function shortRunId(runId: string) {
   return runId.replace(/^run_/, "").slice(0, 8);
 }
 
+function shortSessionId(sessionId: string) {
+  return sessionId.replace(/^sess_/, "").slice(0, 8);
+}
+
 function formatConsoleTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(value));
+}
+
+function formatSessionTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function displayUserName(user: AuthUser | null) {
+  if (!user) return "内测用户";
+  return user.displayName?.trim() || `用户 ${user.id.replace(/^usr_/, "").slice(0, 6)}`;
+}
+
+function environmentLabel(environment?: AuthUser["environment"]) {
+  if (environment === "prod") return "PROD";
+  if (environment === "sit") return "SIT";
+  return "DEV";
 }
 
 function connectionLabel(connection: MonitorConnection) {
@@ -145,10 +187,20 @@ function updateMessage(
 }
 
 export function ChatWorkspace() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [appEnvironment, setAppEnvironment] =
+    useState<AuthUser["environment"]>("dev");
+  const [inviteCode, setInviteCode] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [monitorConnection, setMonitorConnection] =
     useState<MonitorConnection>("connecting");
@@ -157,7 +209,7 @@ export function ChatWorkspace() {
   const [consoleLogs, setConsoleLogs] = useState<ServiceConsoleLog[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionLabel = useMemo(
-    () => (sessionId ? `当前会话 ${sessionId.slice(0, 13)}` : "尚未创建会话"),
+    () => (sessionId ? `当前会话 ${shortSessionId(sessionId)}` : "尚未创建会话"),
     [sessionId],
   );
   const checkedAtLabel = serviceSnapshot ?
@@ -187,7 +239,99 @@ export function ChatWorkspace() {
     [],
   );
 
+  const clearWorkspace = useCallback(() => {
+    setMessages([]);
+    setSessionId(null);
+    setSessions([]);
+    setConsoleLogs([]);
+    setMonitorConnection("connecting");
+    setServiceSnapshot(null);
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    setAuthStatus("anonymous");
+    setAuthUser(null);
+    clearWorkspace();
+    setLoginError("登录已过期，请重新输入内测码");
+  }, [clearWorkspace]);
+
+  const refreshSessions = useCallback(async () => {
+    const response = await fetch("/api/chat/sessions");
+
+    if (response.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(String(response.status));
+    }
+
+    const body = (await response.json()) as {
+      environment: AuthUser["environment"];
+      sessions: ChatSession[];
+    };
+    setAppEnvironment(body.environment);
+    setSessions(body.sessions);
+  }, [handleUnauthorized]);
+
   useEffect(() => {
+    let cancelled = false;
+
+    async function bootstrapAuth() {
+      try {
+        const response = await fetch("/api/auth/me");
+
+        if (cancelled) {
+          return;
+        }
+
+        if (response.status === 401) {
+          const body = (await response.json().catch(() => null)) as {
+            environment?: AuthUser["environment"];
+          } | null;
+          if (body?.environment) {
+            setAppEnvironment(body.environment);
+          }
+          setAuthStatus("anonymous");
+          setAuthUser(null);
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+
+        const body = (await response.json()) as {
+          environment: AuthUser["environment"];
+          user: AuthUser;
+        };
+        setAppEnvironment(body.environment);
+        setAuthUser(body.user);
+        setAuthStatus("authenticated");
+        await refreshSessions();
+      } catch (error) {
+        if (!cancelled) {
+          setAuthStatus("anonymous");
+          setLoginError(
+            error instanceof Error ? `登录状态检查失败：${error.message}` : "登录状态检查失败",
+          );
+        }
+      }
+    }
+
+    void bootstrapAuth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSessions]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      return;
+    }
+
     const source = new EventSource("/api/health/stream");
 
     const handleOpen = () => {
@@ -250,13 +394,127 @@ export function ChatWorkspace() {
     return () => {
       source.close();
     };
-  }, [appendConsoleLog]);
+  }, [appendConsoleLog, authStatus]);
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const code = inviteCode.trim();
+    if (!code || isLoggingIn) {
+      return;
+    }
+
+    setIsLoggingIn(true);
+    setLoginError(null);
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: displayName.trim() || undefined,
+          inviteCode: code,
+        }),
+      });
+
+      const body = (await response.json()) as {
+        environment?: AuthUser["environment"];
+        error?: string;
+        user?: AuthUser;
+      };
+
+      if (body.environment) {
+        setAppEnvironment(body.environment);
+      }
+
+      if (!response.ok || !body.user) {
+        throw new Error(body.error ?? `登录失败：${response.status}`);
+      }
+
+      setAuthUser(body.user);
+      setAuthStatus("authenticated");
+      setInviteCode("");
+      setDisplayName("");
+      clearWorkspace();
+      await refreshSessions();
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "登录失败");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }
+
+  async function logout() {
+    stopStreaming();
+    await fetch("/api/auth/logout", { method: "POST" });
+    setAuthStatus("anonymous");
+    setAuthUser(null);
+    clearWorkspace();
+  }
+
+  function startNewChat() {
+    stopStreaming();
+    setMessages([]);
+    setSessionId(null);
+  }
+
+  async function openSession(nextSessionId: string) {
+    if (nextSessionId === sessionId || isLoadingSession) {
+      return;
+    }
+
+    stopStreaming();
+    setIsLoadingSession(true);
+
+    try {
+      const response = await fetch(
+        `/api/chat/sessions/${encodeURIComponent(nextSessionId)}/messages`,
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(String(response.status));
+      }
+
+      const body = (await response.json()) as {
+        messages: Array<{
+          content: string;
+          id: string;
+          role: "user" | "assistant";
+        }>;
+      };
+
+      setSessionId(nextSessionId);
+      setMessages(
+        body.messages.map((message) => ({
+          content: message.content,
+          id: message.id,
+          role: message.role,
+          status: "complete",
+        })),
+      );
+    } catch (error) {
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "error",
+        source: "client",
+        message:
+          error instanceof Error ? `加载会话失败：${error.message}` : "加载会话失败",
+      });
+    } finally {
+      setIsLoadingSession(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const prompt = input.trim();
-    if (!prompt || isStreaming) {
+    if (!prompt || isStreaming || authStatus !== "authenticated") {
       return;
     }
 
@@ -292,6 +550,9 @@ export function ChatWorkspace() {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          handleUnauthorized();
+        }
         throw new Error(String(response.status));
       }
 
@@ -320,6 +581,7 @@ export function ChatWorkspace() {
 
           if (event.type === "run.accepted") {
             setSessionId(event.sessionId);
+            void refreshSessions();
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
@@ -353,6 +615,7 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.completed") {
+            void refreshSessions();
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
@@ -460,6 +723,58 @@ export function ChatWorkspace() {
     setIsStreaming(false);
   }
 
+  if (authStatus === "checking") {
+    return (
+      <main className="auth-shell">
+        <div className="auth-panel">
+          <div className="auth-kicker">{environmentLabel(appEnvironment)}</div>
+          <h1>正在确认访问权限</h1>
+          <div className="auth-loading" aria-label="加载中" />
+        </div>
+      </main>
+    );
+  }
+
+  if (authStatus === "anonymous") {
+    return (
+      <main className="auth-shell">
+        <form className="auth-panel" onSubmit={login}>
+          <div className="auth-kicker">{environmentLabel(appEnvironment)}</div>
+          <h1>内测访问</h1>
+          <label className="auth-field">
+            <span>内测码</span>
+            <input
+              autoComplete="one-time-code"
+              autoFocus
+              onChange={(event) => setInviteCode(event.target.value)}
+              placeholder="输入内测码"
+              type="password"
+              value={inviteCode}
+            />
+          </label>
+          <label className="auth-field">
+            <span>昵称</span>
+            <input
+              autoComplete="nickname"
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder="可选"
+              type="text"
+              value={displayName}
+            />
+          </label>
+          {loginError ?
+            <p className="auth-error" role="alert">
+              {loginError}
+            </p>
+          : null}
+          <button className="auth-submit" disabled={isLoggingIn} type="submit">
+            {isLoggingIn ? "验证中" : "进入"}
+          </button>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -471,19 +786,19 @@ export function ChatWorkspace() {
         </div>
 
         <nav className="nav-stack" aria-label="主导航">
-          <button className="nav-item active">
+          <button className="nav-item active" onClick={startNewChat} type="button">
             <Plus size={17} />
             新聊天
           </button>
-          <button className="nav-item">
+          <button className="nav-item" type="button">
             <Search size={17} />
             搜索聊天
           </button>
-          <button className="nav-item">
+          <button className="nav-item" type="button">
             <Library size={17} />
             库
           </button>
-          <button className="nav-item">
+          <button className="nav-item" type="button">
             <MoreHorizontal size={17} />
             更多
           </button>
@@ -491,10 +806,25 @@ export function ChatWorkspace() {
 
         <section className="chat-list">
           <p className="section-label">会话</p>
-          <div className="sidebar-state">
-            <strong>{sessionLabel}</strong>
-            <span>{messages.length > 0 ? `${messages.length} 条消息` : "发送消息后开始"}</span>
-          </div>
+          {sessions.length > 0 ?
+            sessions.map((chatSession) => (
+              <button
+                className={`chat-link ${chatSession.id === sessionId ? "active" : ""}`}
+                disabled={isLoadingSession}
+                key={chatSession.id}
+                onClick={() => void openSession(chatSession.id)}
+                type="button"
+              >
+                <strong>{chatSession.title}</strong>
+                <span>
+                  {chatSession.messageCount} 条 · {formatSessionTime(chatSession.updatedAt)}
+                </span>
+              </button>
+            ))
+          : <div className="sidebar-state">
+              <strong>{sessionLabel}</strong>
+              <span>{messages.length > 0 ? `${messages.length} 条消息` : "发送消息后开始"}</span>
+            </div>}
         </section>
 
         <section className="console-panel" aria-label="服务控制台">
@@ -561,11 +891,20 @@ export function ChatWorkspace() {
         </section>
 
         <div className="account-row">
-          <span className="avatar">T</span>
+          <span className="avatar">{environmentLabel(authUser?.environment).slice(0, 1)}</span>
           <span className="account-details">
-            <strong>TEST</strong>
-            <small>Pro</small>
+            <strong>{displayUserName(authUser)}</strong>
+            <small>{environmentLabel(authUser?.environment)}</small>
           </span>
+          <button
+            className="icon-button account-logout"
+            onClick={() => void logout()}
+            type="button"
+            aria-label="退出登录"
+            title="退出登录"
+          >
+            <LogOut size={17} />
+          </button>
         </div>
       </aside>
 

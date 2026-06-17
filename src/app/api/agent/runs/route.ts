@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { encodeAgentEvent } from "@/agent/events/sse";
 import { RunController } from "@/agent/runtime/RunController";
+import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,18 @@ const requestSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  const auth = await getAuthenticatedUser(request);
+
+  if (!auth) {
+    return Response.json(
+      {
+        error: "未登录",
+        environment: getAuthEnvironment(),
+      },
+      { status: 401 },
+    );
+  }
+
   const body = requestSchema.parse(await request.json());
   const encoder = new TextEncoder();
   const runController = new RunController();
@@ -27,7 +40,11 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const event of runController.startRun(body, request.signal)) {
+        for await (const event of runController.startRun(
+          body,
+          request.signal,
+          auth.user.id,
+        )) {
           controller.enqueue(encoder.encode(encodeAgentEvent(event)));
         }
       } catch (error) {

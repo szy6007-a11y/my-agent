@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 
+import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
 import {
   HEALTH_HEARTBEAT_INTERVAL_MS,
   HEALTH_MONITOR_INTERVAL_MS,
@@ -18,6 +19,18 @@ function encodeSse(event: string, data: unknown) {
 }
 
 export async function GET(request: NextRequest) {
+  const auth = await getAuthenticatedUser(request);
+
+  if (!auth) {
+    return Response.json(
+      {
+        error: "未登录",
+        environment: getAuthEnvironment(),
+      },
+      { status: 401 },
+    );
+  }
+
   const encoder = new TextEncoder();
   let sequence = 0;
   let cleanup: (() => void) | null = null;
