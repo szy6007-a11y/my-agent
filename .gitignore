@@ -4,6 +4,7 @@ out
 dist
 coverage
 *.tsbuildinfo
+.my-agent/
 
 .env
 .env*.local

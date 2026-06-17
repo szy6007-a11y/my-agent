@@ -5,6 +5,8 @@ export type AgentMessage = {
   role: AgentRole;
   content: string;
   toolCallId?: string | null;
+  toolCalls?: ModelToolCall[];
+  toolName?: string | null;
   createdAt: string;
 };
 
@@ -34,6 +36,9 @@ export type AgentEvent =
   | { type: "context.built"; snapshotId: string; tokenEstimate: number }
   | { type: "assistant.delta"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
+  | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }
+  | { type: "tool.completed"; runId: string; toolCallId: string; toolName: string }
+  | { type: "tool.failed"; runId: string; toolCallId: string; toolName: string; error: string }
   | {
       type: "usage.updated";
       inputTokens?: number;
@@ -57,7 +62,7 @@ export type AgentRunRequest = {
 
 export type ContextSnapshot = {
   id: string;
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  messages: ModelMessage[];
   promptSections: Array<{
     content: string;
     source: string;
@@ -68,3 +73,24 @@ export type ContextSnapshot = {
   promptTiers: Record<"stable" | "context" | "volatile", string>;
   tokenEstimate: number;
 };
+
+export type ModelToolCall = {
+  arguments: string;
+  id: string;
+  name: string;
+};
+
+export type ModelToolDefinition = {
+  function: {
+    description: string;
+    name: string;
+    parameters: Record<string, unknown>;
+  };
+  type: "function";
+};
+
+export type ModelMessage =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | null; toolCalls?: ModelToolCall[] }
+  | { role: "tool"; content: string; toolCallId: string };

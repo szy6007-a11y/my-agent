@@ -46,7 +46,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
   return NextResponse.json({
     environment: getAuthEnvironment(),
     messages: messages.filter((message) =>
-      message.role === "user" || message.role === "assistant",
+      message.role === "user" ||
+      (message.role === "assistant" && !message.toolCalls?.length),
     ),
     session,
   });

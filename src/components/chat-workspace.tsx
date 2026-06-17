@@ -56,6 +56,9 @@ type AgentEvent =
   | { type: "context.built"; snapshotId: string; tokenEstimate: number }
   | { type: "assistant.delta"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
+  | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }
+  | { type: "tool.completed"; runId: string; toolCallId: string; toolName: string }
+  | { type: "tool.failed"; runId: string; toolCallId: string; toolName: string; error: string }
   | { type: "usage.updated"; inputTokens?: number; outputTokens?: number; totalTokens?: number }
   | { type: "run.completed"; runId: string; finalMessageId: string }
   | { type: "run.failed"; runId: string; error: string }
@@ -817,6 +820,33 @@ export function ChatWorkspace() {
             setMessages((current) =>
               appendMessageContent(current, assistantMessage.id, event.text),
             );
+          }
+
+          if (event.type === "tool.started") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "tool",
+              message: `工具开始 ${event.toolName}`,
+            });
+          }
+
+          if (event.type === "tool.completed") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "tool",
+              message: `工具完成 ${event.toolName}`,
+            });
+          }
+
+          if (event.type === "tool.failed") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "warn",
+              source: "tool",
+              message: `工具失败 ${event.toolName}：${event.error}`,
+            });
           }
 
           if (event.type === "run.completed") {

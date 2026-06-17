@@ -15,7 +15,11 @@ const serverEnvSchema = z.object({
   LANGFUSE_PUBLIC_KEY: z.string().min(1).optional(),
   LANGFUSE_SECRET_KEY: z.string().min(1).optional(),
   LANGFUSE_TRACING_ENVIRONMENT: z.string().min(1).optional(),
+  MEMORY_CHAR_LIMIT: z.coerce.number().int().positive().optional(),
+  MEMORY_DIR: z.string().min(1).optional(),
+  MEMORY_REVIEW_INTERVAL: z.coerce.number().int().min(0).default(10),
   REDIS_URL: z.string().min(1).optional(),
+  USER_MEMORY_CHAR_LIMIT: z.coerce.number().int().positive().optional(),
 });
 
 export const serverEnv = serverEnvSchema.parse(process.env);

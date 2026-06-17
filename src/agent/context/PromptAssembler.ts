@@ -3,11 +3,12 @@ import { join, resolve } from "path";
 
 import {
   type LoadedContextFile,
-  loadMemoryContextFiles,
   loadProjectContextFiles,
   loadSoulIdentity,
 } from "@/agent/context/ContextFiles";
 import { buildSkillIndex, renderSkillIndex } from "@/agent/context/SkillIndex";
+import { displayUserMemoryDir } from "@/agent/memory/MemoryPaths";
+import { MemoryStore } from "@/agent/memory/MemoryStore";
 
 export type PromptTierName = "stable" | "context" | "volatile";
 
@@ -34,6 +35,7 @@ export type PromptAssemblerInput = {
   provider?: string;
   sessionId?: string;
   timeZone?: string;
+  userId?: string;
 };
 
 const PROMPT_VERSION = "2026-06-17.claude-quality-v3";
@@ -185,23 +187,38 @@ function buildProjectContextSection(cwd: string): PromptSection {
   };
 }
 
-function buildMemorySection(cwd: string): PromptSection {
-  const files = loadMemoryContextFiles(cwd);
-
-  if (files.length === 0) {
+function buildMemorySection(input: RequiredPromptInput): PromptSection {
+  if (!input.userId) {
     return {
       content:
-        "Persistent memory storage is not enabled for this MVP run, and no memory context files were found. Do not claim to remember facts across sessions unless they are present in this conversation.",
-      source: "./memory, ./rules/memory.md",
+        "Persistent memory is enabled only after runtime provides an authenticated user id. Do not claim to remember facts across sessions unless they are present in this conversation.",
+      source: "runtime",
       status: "disabled",
       tag: "memory",
       tier: "volatile",
     };
   }
 
+  const store = new MemoryStore(input.userId);
+  store.loadFromDisk();
+  const memoryBlock = store.formatForSystemPrompt("memory");
+  const userBlock = store.formatForSystemPrompt("user");
+  const blocks = [memoryBlock, userBlock].filter((block): block is string => Boolean(block));
+
+  if (blocks.length === 0) {
+    return {
+      content:
+        "Persistent memory is available for this user, but MEMORY.md and USER.md are currently empty. Save stable facts with the memory tool when appropriate.",
+      source: displayUserMemoryDir(input.userId),
+      status: "empty",
+      tag: "memory",
+      tier: "volatile",
+    };
+  }
+
   return {
-    content: files.map(renderLoadedFile).join("\n\n"),
-    source: files.map((file) => file.path).join(", "),
+    content: blocks.join("\n\n"),
+    source: displayUserMemoryDir(input.userId),
     status: "loaded",
     tag: "memory",
     tier: "volatile",
@@ -300,7 +317,7 @@ export class PromptAssembler {
 
     const volatile: PromptSection[] = [
       { ...readPromptFragment("memory-guidance.md"), tag: "memory_guidance", tier: "volatile" },
-      buildMemorySection(input.cwd),
+      buildMemorySection(input),
       buildEnvironmentSection(input),
       buildDateSection(input),
     ];
