@@ -284,6 +284,34 @@ body > button[aria-label="Open Next.js Dev Tools"],
   padding-top: 2px;
 }
 
+.message-thinking {
+  position: relative;
+  width: fit-content;
+  padding-top: 2px;
+  color: #8f8f8f;
+  font-weight: 520;
+  line-height: 1.68;
+}
+
+.message-thinking::after {
+  position: absolute;
+  inset: 2px 0 0;
+  animation: thinking-shimmer 1.6s linear infinite;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 34%,
+    #ffffff 50%,
+    transparent 66%,
+    transparent 100%
+  );
+  background-clip: text;
+  background-size: 220% 100%;
+  color: transparent;
+  content: attr(data-text);
+  -webkit-background-clip: text;
+}
+
 .message-content {
   min-width: 0;
   white-space: pre-wrap;
@@ -358,6 +386,16 @@ body > button[aria-label="Open Next.js Dev Tools"],
 .send-button {
   background: #0f0f0f;
   color: #ffffff;
+}
+
+@keyframes thinking-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+
+  to {
+    background-position: -120% 0;
+  }
 }
 
 @media (max-width: 760px) {

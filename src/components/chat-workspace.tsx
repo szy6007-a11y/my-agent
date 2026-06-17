@@ -295,7 +295,17 @@ export function ChatWorkspace() {
             messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-body">
-                  <div className="message-content">{message.content || " "}</div>
+                  {message.role === "assistant" &&
+                  message.status === "streaming" &&
+                  !message.content.trim() ?
+                    <div
+                      className="message-thinking"
+                      aria-label="思考中"
+                      data-text="思考中"
+                    >
+                      思考中
+                    </div>
+                  : <div className="message-content">{message.content || " "}</div>}
                   {message.role === "assistant" &&
                     message.status !== "streaming" &&
                     message.content.trim() && (
