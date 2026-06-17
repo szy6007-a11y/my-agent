@@ -1,8 +1,9 @@
 "use client";
 
 import {
-  Bot,
+  Check,
   CircleStop,
+  Copy,
   Library,
   Mic,
   MoreHorizontal,
@@ -11,7 +12,6 @@ import {
   Plus,
   Search,
   Send,
-  User,
 } from "lucide-react";
 import { FormEvent, useMemo, useRef, useState } from "react";
 
@@ -19,6 +19,7 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  status?: "streaming" | "complete" | "failed" | "aborted";
 };
 
 type AgentEvent =
@@ -45,16 +46,6 @@ function parseSseEvent(eventText: string): AgentEvent | null {
   return JSON.parse(dataLines.join("\n")) as AgentEvent;
 }
 
-function replaceMessageContent(
-  messages: ChatMessage[],
-  messageId: string,
-  content: string,
-) {
-  return messages.map((message) =>
-    message.id === messageId ? { ...message, content } : message,
-  );
-}
-
 function appendMessageContent(
   messages: ChatMessage[],
   messageId: string,
@@ -67,11 +58,22 @@ function appendMessageContent(
   );
 }
 
+function updateMessage(
+  messages: ChatMessage[],
+  messageId: string,
+  updates: Partial<ChatMessage>,
+) {
+  return messages.map((message) =>
+    message.id === messageId ? { ...message, ...updates } : message,
+  );
+}
+
 export function ChatWorkspace() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${sessionId.slice(0, 13)}` : "尚未创建会话"),
@@ -95,6 +97,7 @@ export function ChatWorkspace() {
       id: crypto.randomUUID(),
       role: "assistant",
       content: "",
+      status: "streaming",
     };
 
     setInput("");
@@ -117,7 +120,7 @@ export function ChatWorkspace() {
       });
 
       if (!response.ok) {
-        throw new Error(`请求失败：${response.status}`);
+        throw new Error(String(response.status));
       }
 
       if (!response.body) {
@@ -158,23 +161,29 @@ export function ChatWorkspace() {
               const assistant = current.find(
                 (message) => message.id === assistantMessage.id,
               );
-              if (assistant?.content.trim()) {
-                return current;
-              }
-              return replaceMessageContent(
+              return updateMessage(
                 current,
                 assistantMessage.id,
-                "没有收到模型回复，请再试一次。",
+                {
+                  content:
+                    assistant?.content.trim() ?
+                      assistant.content
+                    : "没有收到模型回复，请再试一次。",
+                  status: "complete",
+                },
               );
             });
           }
 
           if (event.type === "run.failed") {
             setMessages((current) =>
-              replaceMessageContent(
+              updateMessage(
                 current,
                 assistantMessage.id,
-                `请求失败：${event.error}`,
+                {
+                  content: `请求失败：${event.error}`,
+                  status: "failed",
+                },
               ),
             );
           }
@@ -184,10 +193,10 @@ export function ChatWorkspace() {
               const assistant = current.find(
                 (message) => message.id === assistantMessage.id,
               );
-              if (assistant?.content.trim()) {
-                return current;
-              }
-              return replaceMessageContent(current, assistantMessage.id, "已停止。");
+              return updateMessage(current, assistantMessage.id, {
+                content: assistant?.content.trim() ? assistant.content : "已停止。",
+                status: "aborted",
+              });
             });
           }
         }
@@ -195,10 +204,14 @@ export function ChatWorkspace() {
     } catch (error) {
       if (!abortController.signal.aborted) {
         setMessages((current) =>
-          replaceMessageContent(
+          updateMessage(
             current,
             assistantMessage.id,
-            error instanceof Error ? `请求失败：${error.message}` : "请求失败。",
+            {
+              content:
+                error instanceof Error ? `请求失败：${error.message}` : "请求失败。",
+              status: "failed",
+            },
           ),
         );
       }
@@ -206,6 +219,19 @@ export function ChatWorkspace() {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
+  }
+
+  async function copyMessage(message: ChatMessage) {
+    const text = message.content.trim();
+    if (!text) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(text);
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => {
+      setCopiedMessageId((current) => (current === message.id ? null : current));
+    }, 1600);
   }
 
   function stopStreaming() {
@@ -268,12 +294,26 @@ export function ChatWorkspace() {
           ) : (
             messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
-                <span className="message-avatar">
-                  {message.role === "user" ?
-                    <User size={16} />
-                  : <Bot size={16} />}
-                </span>
-                <div className="message-content">{message.content || " "}</div>
+                <div className="message-body">
+                  <div className="message-content">{message.content || " "}</div>
+                  {message.role === "assistant" &&
+                    message.status !== "streaming" &&
+                    message.content.trim() && (
+                      <div className="message-actions">
+                        <button
+                          className="message-action-button"
+                          type="button"
+                          aria-label="复制回答"
+                          title="复制回答"
+                          onClick={() => void copyMessage(message)}
+                        >
+                          {copiedMessageId === message.id ?
+                            <Check size={17} />
+                          : <Copy size={17} />}
+                        </button>
+                      </div>
+                    )}
+                </div>
               </article>
             ))
           )}

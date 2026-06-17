@@ -224,9 +224,9 @@ body > button[aria-label="Open Next.js Dev Tools"],
   display: flex;
   min-height: 0;
   flex-direction: column;
-  gap: 24px;
+  gap: 38px;
   overflow: auto;
-  padding: 44px max(24px, calc((100vw - 900px) / 2)) 120px;
+  padding: 44px max(24px, calc((100vw - 900px) / 2)) 128px;
 }
 
 .empty-state {
@@ -243,35 +243,71 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .message {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 12px;
+  display: flex;
   width: min(760px, 100%);
   margin: 0 auto;
 }
 
-.message.user .message-content {
-  justify-self: end;
-  max-width: min(620px, 100%);
-  border-radius: 18px;
-  background: var(--muted);
-  padding: 10px 14px;
+.message.user {
+  justify-content: flex-end;
 }
 
-.message-avatar {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
+.message.assistant {
+  justify-content: flex-start;
+}
+
+.message-body {
+  display: grid;
+  min-width: 0;
+  max-width: min(650px, 100%);
+  gap: 12px;
+}
+
+.message.user .message-content {
+  max-width: min(560px, 100%);
   border-radius: 999px;
-  background: var(--muted);
-  color: #333333;
+  background: #0b0b0b;
+  color: #ffffff;
+  padding: 10px 16px;
+  line-height: 1.45;
+}
+
+.message.assistant .message-content {
+  padding-top: 2px;
 }
 
 .message-content {
   min-width: 0;
   white-space: pre-wrap;
   line-height: 1.68;
+}
+
+.message-actions {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  gap: 4px;
+}
+
+.message-action-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: #676767;
+  outline: 0;
+}
+
+.message-action-button:hover {
+  background: var(--muted);
+  color: #222222;
+}
+
+.message-action-button:focus-visible {
+  outline: 2px solid #9b9b9b;
+  outline-offset: 2px;
 }
 
 .composer {
@@ -329,13 +365,12 @@ body > button[aria-label="Open Next.js Dev Tools"],
     padding: 28px 18px 112px;
   }
 
-  .message {
-    grid-template-columns: 26px minmax(0, 1fr);
+  .message-body {
+    max-width: 100%;
   }
 
-  .message-avatar {
-    width: 26px;
-    height: 26px;
+  .message.user .message-body {
+    max-width: calc(100% - 38px);
   }
 
   .composer {
