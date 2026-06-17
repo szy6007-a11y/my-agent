@@ -150,6 +150,17 @@ async function ensureAuthSchema() {
   `;
 
   await db`
+    update auth_sessions s
+    set revoked_at = now()
+    from beta_users u
+    where s.user_id = u.id
+      and s.environment = ${serverEnv.APP_ENV}
+      and u.environment = ${serverEnv.APP_ENV}
+      and u.login_id_hash = md5(${serverEnv.APP_ENV} || ':legacy-login:' || u.id)
+      and s.revoked_at is null
+  `;
+
+  await db`
     create table if not exists auth_login_attempts (
       id bigserial primary key,
       environment text not null,
