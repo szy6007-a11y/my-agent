@@ -36,7 +36,7 @@ export type PromptAssemblerInput = {
   timeZone?: string;
 };
 
-const PROMPT_VERSION = "2026-06-17.hermes-style-v1";
+const PROMPT_VERSION = "2026-06-17.claude-quality-v2";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 
 function promptFilePath(filename: string): string {
@@ -279,8 +279,14 @@ export class PromptAssembler {
     const stable: PromptSection[] = [
       identity,
       { ...readPromptFragment("runtime-guidance.md"), tag: "runtime_guidance" },
+      { ...readPromptFragment("context-discipline.md"), tag: "context_discipline" },
       { ...readPromptFragment("tool-guidance.md"), tag: "tool_guidance" },
       buildAvailableToolsSection(input.availableTools),
+      { ...readPromptFragment("software-engineering-guidance.md"), tag: "software_engineering_guidance" },
+      { ...readPromptFragment("task-management.md"), tag: "task_management" },
+      { ...readPromptFragment("action-safety.md"), tag: "action_safety" },
+      { ...readPromptFragment("verification-guidance.md"), tag: "verification_guidance" },
+      { ...readPromptFragment("git-collaboration.md"), tag: "git_collaboration" },
       { ...readPromptFragment("skills-guidance.md"), tag: "skills_guidance" },
       buildSkillsSection(input.cwd),
       { ...readPromptFragment("platform-webui.md"), tag: "platform_guidance" },

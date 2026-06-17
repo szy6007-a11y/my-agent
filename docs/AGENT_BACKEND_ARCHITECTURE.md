@@ -379,6 +379,19 @@ Context Engine 决定模型看到的全部内容。建议分层：
 - 上下文文件要做注入扫描、大小上限、head/tail 截断。
 - 记录 `ContextSnapshot`，用于 debug `/context`、成本分析和回归评测。
 
+当前 MVP 的 system prompt 已按 Claude Code-like 的工程 agent 质量要求拆成多个稳定片段，并由 `PromptAssembler` 拼装成 XML-like 标签结构：
+
+- `identity.md`：身份、语言、协作方式和不编造原则。
+- `runtime-guidance.md`：服务端运行边界、模型能力声明、压缩续接规则。
+- `context-discipline.md`：上下文层级、项目文件来源、prompt injection 和隐藏配置保护。
+- `tool-guidance.md`：工具使用、失败重试、外部数据降权。
+- `software-engineering-guidance.md`：读后再改、遵循项目模式、控制改动范围、安全编码。
+- `task-management.md`：复杂任务拆解、进度状态、阻塞口径。
+- `action-safety.md`：可逆性、危险操作确认、密钥保护、保留用户改动。
+- `verification-guidance.md`：按风险验证、如实汇报通过/失败/未运行。
+- `git-collaboration.md`：提交前检查、精确 staging、禁止破坏性 git 操作。
+- `skills-guidance.md`、`memory-guidance.md`、`platform-webui.md`：技能、记忆和 Web UI 输出协议。
+
 ## 9. Compaction 与 Token Budget
 
 MVP 需要三层保护：
