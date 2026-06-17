@@ -44,7 +44,7 @@ services:
   redis:
     image: ${REDIS_IMAGE:-redis:8-alpine}
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:

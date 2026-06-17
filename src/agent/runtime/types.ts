@@ -46,7 +46,7 @@ export type AgentEvent =
   | { type: "run.aborted"; runId: string; reason: string };
 
 export type AgentRunRequest = {
-  sessionId?: string;
+  sessionId?: string | null;
   agentId?: string;
   message: string;
   model?: string;

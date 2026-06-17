@@ -158,38 +158,53 @@ button {
 }
 
 .account-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
   margin-top: auto;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding: 12px 4px 0;
+  align-items: center;
   justify-content: flex-start;
+  gap: 10px;
 }
 
-.account-row span:last-child {
+.account-details {
   display: grid;
-  gap: 1px;
   min-width: 0;
+  gap: 1px;
+  line-height: 1.2;
 }
 
-.account-row strong,
-.account-row small {
+.account-details strong,
+.account-details small {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.account-row small {
+.account-details strong {
+  color: #242424;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.account-details small {
   color: var(--text-muted);
+  font-size: 12px;
 }
 
 .avatar {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   place-items: center;
   border-radius: 999px;
-  background: #d9e5df;
-  color: #4a5b53;
-  font-size: 12px;
+  background: #252525;
+  color: #ffffff;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -267,23 +282,6 @@ button {
   background: #ffffff;
   box-shadow: var(--shadow);
   padding: 8px;
-}
-
-.run-status {
-  position: fixed;
-  right: 22px;
-  bottom: 92px;
-  display: grid;
-  max-width: min(420px, calc(100vw - 44px));
-  gap: 4px;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-align: right;
-}
-
-.run-status strong {
-  color: #b42318;
-  font-weight: 600;
 }
 
 .composer textarea {

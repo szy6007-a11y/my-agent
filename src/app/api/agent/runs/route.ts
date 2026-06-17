@@ -14,7 +14,7 @@ const requestSchema = z.object({
   permissionMode: z
     .enum(["read-only", "ask-on-write", "auto-safe", "plan", "bypass"])
     .optional(),
-  sessionId: z.string().optional(),
+  sessionId: z.string().nullish(),
   thinking: z.enum(["enabled", "disabled"]).optional(),
 });
 

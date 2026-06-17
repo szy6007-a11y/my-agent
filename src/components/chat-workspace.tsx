@@ -33,15 +33,38 @@ type AgentEvent =
   | { type: "run.aborted"; runId: string; reason: string };
 
 function parseSseEvent(eventText: string): AgentEvent | null {
-  const dataLine = eventText
+  const dataLines = eventText
     .split("\n")
-    .find((line) => line.startsWith("data: "));
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => line.slice(6));
 
-  if (!dataLine) {
+  if (dataLines.length === 0) {
     return null;
   }
 
-  return JSON.parse(dataLine.slice(6)) as AgentEvent;
+  return JSON.parse(dataLines.join("\n")) as AgentEvent;
+}
+
+function replaceMessageContent(
+  messages: ChatMessage[],
+  messageId: string,
+  content: string,
+) {
+  return messages.map((message) =>
+    message.id === messageId ? { ...message, content } : message,
+  );
+}
+
+function appendMessageContent(
+  messages: ChatMessage[],
+  messageId: string,
+  text: string,
+) {
+  return messages.map((message) =>
+    message.id === messageId ?
+      { ...message, content: message.content + text }
+    : message,
+  );
 }
 
 export function ChatWorkspace() {
@@ -49,8 +72,6 @@ export function ChatWorkspace() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [runStatus, setRunStatus] = useState("准备就绪");
-  const [lastError, setLastError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${sessionId.slice(0, 13)}` : "尚未创建会话"),
@@ -77,10 +98,8 @@ export function ChatWorkspace() {
     };
 
     setInput("");
-    setLastError(null);
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setIsStreaming(true);
-    setRunStatus("创建 run");
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -92,10 +111,14 @@ export function ChatWorkspace() {
         body: JSON.stringify({
           maxTokens: 1024,
           message: prompt,
-          sessionId,
+          ...(sessionId ? { sessionId } : {}),
         }),
         signal: abortController.signal,
       });
+
+      if (!response.ok) {
+        throw new Error(`请求失败：${response.status}`);
+      }
 
       if (!response.body) {
         throw new Error("Missing response body");
@@ -122,45 +145,62 @@ export function ChatWorkspace() {
 
           if (event.type === "run.accepted") {
             setSessionId(event.sessionId);
-            setRunStatus("run 已接受");
-          }
-
-          if (event.type === "run.started") {
-            setRunStatus("模型生成中");
-          }
-
-          if (event.type === "context.built") {
-            setRunStatus(`上下文已构建 · 约 ${event.tokenEstimate} tokens`);
           }
 
           if (event.type === "assistant.delta") {
             setMessages((current) =>
-              current.map((message) =>
-                message.id === assistantMessage.id
-                  ? { ...message, content: message.content + event.text }
-                  : message,
-              ),
+              appendMessageContent(current, assistantMessage.id, event.text),
             );
           }
 
           if (event.type === "run.completed") {
-            setRunStatus("已完成");
+            setMessages((current) => {
+              const assistant = current.find(
+                (message) => message.id === assistantMessage.id,
+              );
+              if (assistant?.content.trim()) {
+                return current;
+              }
+              return replaceMessageContent(
+                current,
+                assistantMessage.id,
+                "没有收到模型回复，请再试一次。",
+              );
+            });
           }
 
           if (event.type === "run.failed") {
-            setLastError(event.error);
-            setRunStatus("失败");
+            setMessages((current) =>
+              replaceMessageContent(
+                current,
+                assistantMessage.id,
+                `请求失败：${event.error}`,
+              ),
+            );
           }
 
           if (event.type === "run.aborted") {
-            setRunStatus("已停止");
+            setMessages((current) => {
+              const assistant = current.find(
+                (message) => message.id === assistantMessage.id,
+              );
+              if (assistant?.content.trim()) {
+                return current;
+              }
+              return replaceMessageContent(current, assistantMessage.id, "已停止。");
+            });
           }
         }
       }
     } catch (error) {
       if (!abortController.signal.aborted) {
-        setLastError(error instanceof Error ? error.message : "请求失败");
-        setRunStatus("失败");
+        setMessages((current) =>
+          replaceMessageContent(
+            current,
+            assistantMessage.id,
+            error instanceof Error ? `请求失败：${error.message}` : "请求失败。",
+          ),
+        );
       }
     } finally {
       setIsStreaming(false);
@@ -211,10 +251,10 @@ export function ChatWorkspace() {
         </section>
 
         <div className="account-row">
-          <span className="avatar">AI</span>
-          <span>
-            <strong>本地开发</strong>
-            <small>DeepSeek</small>
+          <span className="avatar">T</span>
+          <span className="account-details">
+            <strong>TEST</strong>
+            <small>Pro</small>
           </span>
         </div>
       </aside>
@@ -237,11 +277,6 @@ export function ChatWorkspace() {
               </article>
             ))
           )}
-        </div>
-
-        <div className="run-status" role="status">
-          <span>{runStatus}</span>
-          {lastError ? <strong>{lastError}</strong> : null}
         </div>
 
         <form className="composer" onSubmit={submit}>
