@@ -162,6 +162,210 @@ body > button[aria-label="Open Next.js Dev Tools"],
   font-size: 12px;
 }
 
+.console-panel {
+  display: grid;
+  min-height: 0;
+  gap: 11px;
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding: 14px 2px 0;
+}
+
+.console-header,
+.console-title,
+.service-row,
+.console-log-entry {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.console-header {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.console-title {
+  gap: 6px;
+  color: #252525;
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.connection-pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 680;
+  line-height: 1.1;
+}
+
+.connection-pill.connected {
+  background: #e2f7eb;
+  color: #11723f;
+}
+
+.connection-pill.connecting {
+  background: #eeeeee;
+  color: #626262;
+}
+
+.connection-pill.disconnected {
+  background: #fde8e8;
+  color: #b42318;
+}
+
+.console-summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: center;
+}
+
+.console-summary strong,
+.console-summary span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-summary strong {
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.console-summary span:last-child {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.service-list {
+  display: grid;
+  gap: 8px;
+}
+
+.service-row {
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.status-light {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: #8b8b8b;
+}
+
+.status-light.ok {
+  background: #16a34a;
+}
+
+.status-light.warning,
+.status-light.degraded {
+  background: #d97706;
+}
+
+.status-light.disabled,
+.status-light.connecting {
+  background: #9ca3af;
+}
+
+.status-light.disconnected,
+.status-light.error {
+  background: #dc2626;
+}
+
+.service-copy,
+.console-log-message {
+  display: grid;
+  min-width: 0;
+}
+
+.service-copy {
+  gap: 2px;
+}
+
+.service-copy strong,
+.service-copy span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.service-copy strong {
+  color: #303030;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.service-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.console-log-list {
+  display: grid;
+  max-height: 158px;
+  min-height: 56px;
+  gap: 9px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.console-log-entry {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.console-log-entry time {
+  color: #7c7c7c;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.console-log-message {
+  gap: 2px;
+}
+
+.console-log-meta {
+  overflow: hidden;
+  color: #5f5f5f;
+  font-size: 10px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-log-entry.warn .console-log-meta {
+  color: #a16207;
+}
+
+.console-log-entry.error .console-log-meta {
+  color: #b42318;
+}
+
+.console-log-text,
+.console-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.console-log-text {
+  overflow-wrap: anywhere;
+}
+
+.console-empty {
+  margin: 0;
+}
+
 .account-row {
   display: flex;
   width: 100%;

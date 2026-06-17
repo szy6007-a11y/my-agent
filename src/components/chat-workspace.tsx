@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   Check,
   CircleStop,
   Copy,
@@ -13,7 +14,13 @@ import {
   Search,
   Send,
 } from "lucide-react";
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import type {
+  ServiceHealthSnapshot,
+  ServiceHealthState,
+  ServiceHealthStatus,
+} from "@/lib/service-health";
 
 type ChatMessage = {
   id: string;
@@ -33,6 +40,33 @@ type AgentEvent =
   | { type: "run.failed"; runId: string; error: string }
   | { type: "run.aborted"; runId: string; reason: string };
 
+type MonitorConnection = "connecting" | "connected" | "disconnected";
+
+type ServiceConsoleLog = {
+  id: string;
+  at: string;
+  level: "info" | "warn" | "error";
+  source: string;
+  message: string;
+};
+
+type ServiceSnapshotEvent = {
+  type: "status.snapshot";
+  sequence: number;
+  snapshot: ServiceHealthSnapshot;
+};
+
+type ServiceLogEvent = {
+  type: "status.log";
+  sequence: number;
+  at: string;
+  level: ServiceConsoleLog["level"];
+  source: string;
+  message: string;
+};
+
+const MAX_CONSOLE_LOGS = 28;
+
 function parseSseEvent(eventText: string): AgentEvent | null {
   const dataLines = eventText
     .split("\n")
@@ -44,6 +78,48 @@ function parseSseEvent(eventText: string): AgentEvent | null {
   }
 
   return JSON.parse(dataLines.join("\n")) as AgentEvent;
+}
+
+function parseServiceEvent<T>(event: Event) {
+  try {
+    return JSON.parse((event as MessageEvent<string>).data) as T;
+  } catch {
+    return null;
+  }
+}
+
+function shortRunId(runId: string) {
+  return runId.replace(/^run_/, "").slice(0, 8);
+}
+
+function formatConsoleTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
+function connectionLabel(connection: MonitorConnection) {
+  if (connection === "connected") return "在线";
+  if (connection === "disconnected") return "重连中";
+  return "连接中";
+}
+
+function healthStatusLabel(status: ServiceHealthStatus) {
+  return status === "ok" ? "服务正常" : "需要关注";
+}
+
+function serviceStateLabel(state: ServiceHealthState) {
+  if (state === "ok") return "正常";
+  if (state === "disabled") return "未启用";
+  return "告警";
+}
+
+function logLevelLabel(level: ServiceConsoleLog["level"]) {
+  if (level === "error") return "错误";
+  if (level === "warn") return "警告";
+  return "信息";
 }
 
 function appendMessageContent(
@@ -74,11 +150,107 @@ export function ChatWorkspace() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [monitorConnection, setMonitorConnection] =
+    useState<MonitorConnection>("connecting");
+  const [serviceSnapshot, setServiceSnapshot] =
+    useState<ServiceHealthSnapshot | null>(null);
+  const [consoleLogs, setConsoleLogs] = useState<ServiceConsoleLog[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${sessionId.slice(0, 13)}` : "尚未创建会话"),
     [sessionId],
   );
+  const checkedAtLabel = serviceSnapshot ?
+    `最近检查 ${formatConsoleTime(serviceSnapshot.checkedAt)}`
+  : "等待第一条快照";
+  const overallStatusLabel = serviceSnapshot ?
+    healthStatusLabel(serviceSnapshot.status)
+  : "建立监听";
+
+  const appendConsoleLog = useCallback(
+    (log: Omit<ServiceConsoleLog, "id"> & { id?: string }) => {
+      const id = log.id ?? crypto.randomUUID();
+
+      setConsoleLogs((current) =>
+        [
+          {
+            id,
+            at: log.at,
+            level: log.level,
+            source: log.source,
+            message: log.message,
+          },
+          ...current,
+        ].slice(0, MAX_CONSOLE_LOGS),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const source = new EventSource("/api/health/stream");
+
+    const handleOpen = () => {
+      setMonitorConnection("connected");
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "info",
+        source: "client",
+        message: "控制台监听通道已连接",
+      });
+    };
+
+    const handleError = () => {
+      setMonitorConnection("disconnected");
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "error",
+        source: "client",
+        message: "控制台监听通道断开，浏览器正在重连",
+      });
+    };
+
+    const handleSnapshot = (event: Event) => {
+      const payload = parseServiceEvent<ServiceSnapshotEvent>(event);
+
+      if (!payload) {
+        return;
+      }
+
+      setMonitorConnection("connected");
+      setServiceSnapshot(payload.snapshot);
+    };
+
+    const handleLog = (event: Event) => {
+      const payload = parseServiceEvent<ServiceLogEvent>(event);
+
+      if (!payload) {
+        return;
+      }
+
+      appendConsoleLog({
+        id: `status-${payload.sequence}`,
+        at: payload.at,
+        level: payload.level,
+        source: payload.source,
+        message: payload.message,
+      });
+    };
+
+    const handleHeartbeat = () => {
+      setMonitorConnection("connected");
+    };
+
+    source.onopen = handleOpen;
+    source.onerror = handleError;
+    source.addEventListener("status.snapshot", handleSnapshot);
+    source.addEventListener("status.log", handleLog);
+    source.addEventListener("status.heartbeat", handleHeartbeat);
+
+    return () => {
+      source.close();
+    };
+  }, [appendConsoleLog]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -148,6 +320,30 @@ export function ChatWorkspace() {
 
           if (event.type === "run.accepted") {
             setSessionId(event.sessionId);
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: `运行已接收 ${shortRunId(event.runId)}`,
+            });
+          }
+
+          if (event.type === "run.started") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: `模型流开始 ${shortRunId(event.runId)}`,
+            });
+          }
+
+          if (event.type === "context.built") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: `上下文已构建，约 ${event.tokenEstimate} tokens`,
+            });
           }
 
           if (event.type === "assistant.delta") {
@@ -157,6 +353,12 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.completed") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: `运行完成 ${shortRunId(event.runId)}`,
+            });
             setMessages((current) => {
               const assistant = current.find(
                 (message) => message.id === assistantMessage.id,
@@ -176,6 +378,12 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.failed") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "error",
+              source: "agent",
+              message: `运行失败 ${shortRunId(event.runId)}：${event.error}`,
+            });
             setMessages((current) =>
               updateMessage(
                 current,
@@ -189,6 +397,12 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.aborted") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "warn",
+              source: "agent",
+              message: `运行已停止 ${shortRunId(event.runId)}`,
+            });
             setMessages((current) => {
               const assistant = current.find(
                 (message) => message.id === assistantMessage.id,
@@ -203,6 +417,13 @@ export function ChatWorkspace() {
       }
     } catch (error) {
       if (!abortController.signal.aborted) {
+        appendConsoleLog({
+          at: new Date().toISOString(),
+          level: "error",
+          source: "agent",
+          message:
+            error instanceof Error ? `请求失败：${error.message}` : "请求失败。",
+        });
         setMessages((current) =>
           updateMessage(
             current,
@@ -273,6 +494,69 @@ export function ChatWorkspace() {
           <div className="sidebar-state">
             <strong>{sessionLabel}</strong>
             <span>{messages.length > 0 ? `${messages.length} 条消息` : "发送消息后开始"}</span>
+          </div>
+        </section>
+
+        <section className="console-panel" aria-label="服务控制台">
+          <div className="console-header">
+            <span className="console-title">
+              <Activity size={15} />
+              控制台
+            </span>
+            <span className={`connection-pill ${monitorConnection}`}>
+              {connectionLabel(monitorConnection)}
+            </span>
+          </div>
+
+          <div className="console-summary">
+            <span
+              className={`status-light ${serviceSnapshot?.status ?? monitorConnection}`}
+              aria-hidden="true"
+            />
+            <strong>{overallStatusLabel}</strong>
+            <span>{checkedAtLabel}</span>
+          </div>
+
+          <div className="service-list">
+            {serviceSnapshot ?
+              serviceSnapshot.services.map((service) => (
+                <div className="service-row" key={service.id}>
+                  <span
+                    className={`status-light ${service.state}`}
+                    title={serviceStateLabel(service.state)}
+                  />
+                  <span className="service-copy">
+                    <strong>{service.label}</strong>
+                    <span>
+                      {service.message}
+                      {service.detail ? ` · ${service.detail}` : ""}
+                    </span>
+                  </span>
+                </div>
+              ))
+            : <div className="service-row">
+                <span className="status-light connecting" aria-hidden="true" />
+                <span className="service-copy">
+                  <strong>服务快照</strong>
+                  <span>正在建立监听</span>
+                </span>
+              </div>}
+          </div>
+
+          <div className="console-log-list" aria-live="polite">
+            {consoleLogs.length > 0 ?
+              consoleLogs.map((log) => (
+                <div className={`console-log-entry ${log.level}`} key={log.id}>
+                  <time dateTime={log.at}>{formatConsoleTime(log.at)}</time>
+                  <span className="console-log-message">
+                    <span className="console-log-meta">
+                      {log.source} · {logLevelLabel(log.level)}
+                    </span>
+                    <span className="console-log-text">{log.message}</span>
+                  </span>
+                </div>
+              ))
+            : <p className="console-empty">等待服务事件</p>}
           </div>
         </section>
 

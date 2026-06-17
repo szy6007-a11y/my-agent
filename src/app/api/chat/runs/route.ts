@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import type OpenAI from "openai";
 import { z } from "zod";
 
-import { deepseek, deepseekModels } from "@/lib/ai/deepseek";
+import * as deepseekModule from "@/lib/ai/deepseek";
 
 export const runtime = "nodejs";
 
@@ -23,6 +23,22 @@ type DeepSeekStreamingParams =
     thinking: { type: "enabled" | "disabled" };
   };
 
+type DeepSeekClientModule = typeof deepseekModule & {
+  deepseek?: OpenAI;
+  getDeepSeekClient?: () => OpenAI;
+};
+
+function getChatCompletionClient() {
+  const clientModule = deepseekModule as DeepSeekClientModule;
+  const deepseek = clientModule.getDeepSeekClient?.() ?? clientModule.deepseek;
+
+  if (!deepseek) {
+    throw new Error("DeepSeek client is not available");
+  }
+
+  return deepseek;
+}
+
 function sse(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
@@ -39,18 +55,19 @@ export async function POST(request: NextRequest) {
 
       try {
         send("run.created", {
-          model: body.model ?? deepseekModels.default,
+          model: body.model ?? deepseekModule.deepseekModels.default,
           createdAt: new Date().toISOString(),
         });
 
         const completionParams: DeepSeekStreamingParams = {
           max_tokens: body.maxTokens ?? 1024,
-          model: body.model ?? deepseekModels.default,
+          model: body.model ?? deepseekModule.deepseekModels.default,
           messages: body.messages,
           stream: true,
           thinking: { type: body.thinking },
         };
 
+        const deepseek = getChatCompletionClient();
         const completion =
           await deepseek.chat.completions.create(completionParams);
 
