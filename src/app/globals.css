@@ -252,6 +252,12 @@ body > button[aria-label="Open Next.js Dev Tools"],
   justify-content: flex-end;
 }
 
+.message.user .message-body {
+  width: fit-content;
+  max-width: min(560px, 100%);
+  justify-items: end;
+}
+
 .message.assistant {
   justify-content: flex-start;
 }
@@ -264,10 +270,12 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .message.user .message-content {
-  max-width: min(560px, 100%);
+  width: fit-content;
+  max-width: 100%;
   border-radius: 999px;
   background: #0b0b0b;
   color: #ffffff;
+  overflow-wrap: break-word;
   padding: 10px 16px;
   line-height: 1.45;
 }
@@ -370,6 +378,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   }
 
   .message.user .message-body {
+    width: fit-content;
     max-width: calc(100% - 38px);
   }
 
