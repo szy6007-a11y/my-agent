@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { isContextSummaryMessage } from "@/agent/context/ContextSummary";
 import { sessionRepository } from "@/agent/sessions/SessionRepository";
 import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
 
@@ -45,9 +46,11 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
   return NextResponse.json({
     environment: getAuthEnvironment(),
-    messages: messages.filter((message) =>
-      message.role === "user" ||
-      (message.role === "assistant" && !message.toolCalls?.length),
+    messages: messages.filter(
+      (message) =>
+        !isContextSummaryMessage(message) &&
+        (message.role === "user" ||
+          (message.role === "assistant" && !message.toolCalls?.length)),
     ),
     session,
   });

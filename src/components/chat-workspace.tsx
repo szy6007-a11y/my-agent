@@ -54,6 +54,13 @@ type AgentEvent =
   | { type: "run.accepted"; runId: string; sessionId: string }
   | { type: "run.started"; runId: string }
   | { type: "context.built"; snapshotId: string; tokenEstimate: number }
+  | {
+      type: "context.compacted";
+      afterTokenEstimate: number;
+      beforeTokenEstimate: number;
+      compactedMessageCount: number;
+      summaryMessageId: string;
+    }
   | { type: "assistant.delta"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
   | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }
@@ -813,6 +820,15 @@ export function ChatWorkspace() {
               level: "info",
               source: "agent",
               message: `上下文已构建，约 ${event.tokenEstimate} tokens`,
+            });
+          }
+
+          if (event.type === "context.compacted") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: `上下文已压缩，折叠 ${event.compactedMessageCount} 条历史`,
             });
           }
 

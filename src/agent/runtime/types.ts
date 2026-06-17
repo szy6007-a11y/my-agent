@@ -1,9 +1,18 @@
 export type AgentRole = "system" | "user" | "assistant" | "tool";
 
+export type AgentMessageContentKind = "context_summary";
+
+export type ContextSummaryMetadata = {
+  coveredMessageCount?: number;
+  coveredUntilMessageId?: string;
+};
+
 export type AgentMessage = {
   id: string;
   role: AgentRole;
   content: string;
+  contentKind?: AgentMessageContentKind;
+  contextSummary?: ContextSummaryMetadata;
   toolCallId?: string | null;
   toolCalls?: ModelToolCall[];
   toolName?: string | null;
@@ -34,6 +43,13 @@ export type AgentEvent =
   | { type: "run.accepted"; runId: string; sessionId: string }
   | { type: "run.started"; runId: string }
   | { type: "context.built"; snapshotId: string; tokenEstimate: number }
+  | {
+      type: "context.compacted";
+      afterTokenEstimate: number;
+      beforeTokenEstimate: number;
+      compactedMessageCount: number;
+      summaryMessageId: string;
+    }
   | { type: "assistant.delta"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
   | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }

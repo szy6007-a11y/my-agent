@@ -2,13 +2,16 @@ import { randomUUID } from "crypto";
 import postgres from "postgres";
 
 import type {
+  ContextSummaryMetadata,
   AgentEvent,
   AgentMessage,
+  AgentMessageContentKind,
   AgentRole,
   ModelToolCall,
   RunStatus,
 } from "@/agent/runtime/types";
 import type { PromptAssembly } from "@/agent/context/PromptAssembler";
+import { CONTEXT_SUMMARY_KIND } from "@/agent/context/ContextSummary";
 import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 
@@ -16,6 +19,8 @@ type StoredMessageRow = {
   id: string;
   role: AgentRole;
   content_json: {
+    kind?: AgentMessageContentKind;
+    summary?: ContextSummaryMetadata;
     text?: string;
     toolCalls?: ModelToolCall[];
   };
@@ -271,6 +276,8 @@ function toAgentMessage(row: StoredMessageRow): AgentMessage {
     id: row.id,
     role: row.role,
     content: contentText(row),
+    contentKind: row.content_json.kind,
+    contextSummary: row.content_json.summary,
     toolCallId: row.tool_call_id,
     toolCalls,
     toolName: row.tool_name,
@@ -404,7 +411,9 @@ export class SessionRepository {
         s.status,
         s.created_at,
         s.updated_at,
-        count(m.id)::int as message_count
+        count(m.id) filter (
+          where coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
+        )::int as message_count
       from sessions s
       left join messages m on m.session_id = s.id
       where s.user_id = ${userId}
@@ -452,6 +461,8 @@ export class SessionRepository {
     sessionId: string;
     role: AgentMessage["role"];
     content: string;
+    contentKind?: AgentMessageContentKind;
+    contextSummary?: ContextSummaryMetadata;
     toolCallId?: string | null;
     toolCalls?: ModelToolCall[];
     toolName?: string | null;
@@ -460,6 +471,8 @@ export class SessionRepository {
     const db = getSql();
     const id = `msg_${randomUUID()}`;
     const contentJson = {
+      ...(input.contentKind ? { kind: input.contentKind } : {}),
+      ...(input.contextSummary ? { summary: input.contextSummary } : {}),
       text: input.content,
       ...(input.toolCalls && input.toolCalls.length > 0 ? { toolCalls: input.toolCalls } : {}),
     };
@@ -560,6 +573,7 @@ export class SessionRepository {
           or (${roles.assistant} and m.role = 'assistant')
           or (${roles.tool} and m.role = 'tool')
         )
+        and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
         and (
           to_tsvector('simple', coalesce(m.content_json->>'text', '')) @@ search_query.query
           or coalesce(m.content_json->>'text', '') ilike ${`%${query}%`}
@@ -634,6 +648,7 @@ export class SessionRepository {
         where m.session_id = ${input.sessionId}
           and s.user_id = ${input.userId}
           and s.environment = ${serverEnv.APP_ENV}
+          and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
       ),
       anchor as (
         select rn
@@ -683,6 +698,7 @@ export class SessionRepository {
         where m.session_id = ${input.sessionId}
           and s.user_id = ${input.userId}
           and s.environment = ${serverEnv.APP_ENV}
+          and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
       )
       select *
       from ordered

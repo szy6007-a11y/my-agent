@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { ModelStreamInput } from "@/agent/models/ProviderAdapter";
+import type { ModelRouter } from "@/agent/models/ModelRouter";
+import type { AgentMessage } from "@/agent/runtime/types";
+import type { SessionRepository } from "@/agent/sessions/SessionRepository";
+import type { PromptAssembly } from "@/agent/context/PromptAssembler";
+
+process.env.DEEPSEEK_API_KEY ??= "test-deepseek-key";
+
+function makeMessage(index: number, content = "message ".repeat(80)): AgentMessage {
+  return {
+    id: `msg_${index}`,
+    content: `${content}${index}`,
+    createdAt: new Date(index * 1000).toISOString(),
+    role: index % 2 === 0 ? "assistant" : "user",
+  };
+}
+
+function makePrompt(prompt: string): PromptAssembly {
+  return {
+    prompt,
+    sections: [],
+    tiers: {
+      context: "<project_context_layer status=\"empty\">\n</project_context_layer>",
+      stable: "<stable_context status=\"empty\">\n</stable_context>",
+      volatile: "<volatile_context status=\"empty\">\n</volatile_context>",
+    },
+  };
+}
+
+class FakeModelRouter {
+  readonly prompts: string[] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.prompts.push(input.context.messages.map((message) => message.content).join("\n\n"));
+    yield {
+      type: "text_delta" as const,
+      text: "## Historical Task Snapshot\nSummarized older work.",
+    };
+  }
+}
+
+class FakeSessionRepository {
+  readonly appended: Array<{
+    content: string;
+    contentKind?: AgentMessage["contentKind"];
+    contextSummary?: AgentMessage["contextSummary"];
+    role: AgentMessage["role"];
+  }> = [];
+
+  async appendMessage(input: {
+    content: string;
+    contentKind?: AgentMessage["contentKind"];
+    contextSummary?: AgentMessage["contextSummary"];
+    role: AgentMessage["role"];
+  }): Promise<{ id: string }> {
+    this.appended.push(input);
+    return { id: `summary_${this.appended.length}` };
+  }
+}
+
+test("ContextCompressor appends a hidden reference-only summary", async () => {
+  const [{ ContextCompressor }, { CONTEXT_SUMMARY_HEADING, CONTEXT_SUMMARY_KIND }] =
+    await Promise.all([
+      import("@/agent/context/ContextCompressor"),
+      import("@/agent/context/ContextSummary"),
+    ]);
+  const modelRouter = new FakeModelRouter();
+  const sessions = new FakeSessionRepository();
+  const compressor = new ContextCompressor(
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    {
+      contextWindowTokens: 100,
+      minimumContextTokens: 1,
+      protectLastN: 2,
+      thresholdPercent: 0.1,
+    },
+  );
+
+  const result = await compressor.maybeCompress({
+    messages: Array.from({ length: 6 }, (_, index) => makeMessage(index + 1)),
+    model: "deepseek-test",
+    runId: "run_1",
+    sessionId: "sess_1",
+    signal: new AbortController().signal,
+    userId: "usr_1",
+  });
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.compactedMessageCount, 3);
+  assert.equal(sessions.appended.length, 1);
+  assert.equal(sessions.appended[0].contentKind, CONTEXT_SUMMARY_KIND);
+  assert.deepEqual(sessions.appended[0].contextSummary, {
+    coveredMessageCount: 3,
+    coveredUntilMessageId: "msg_3",
+  });
+  assert.equal(sessions.appended[0].role, "user");
+  assert.ok(sessions.appended[0].content.startsWith(CONTEXT_SUMMARY_HEADING));
+  assert.equal(result.messages.at(-1)?.contentKind, CONTEXT_SUMMARY_KIND);
+});
+
+test("ContextCompressor folds the previous compacted summary into the next summary", async () => {
+  const [{ ContextCompressor }, { CONTEXT_SUMMARY_KIND, renderContextSummary }] =
+    await Promise.all([
+      import("@/agent/context/ContextCompressor"),
+      import("@/agent/context/ContextSummary"),
+    ]);
+  const modelRouter = new FakeModelRouter();
+  const sessions = new FakeSessionRepository();
+  const compressor = new ContextCompressor(
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    {
+      contextWindowTokens: 100,
+      minimumContextTokens: 1,
+      protectLastN: 2,
+      thresholdPercent: 0.1,
+    },
+  );
+  const previousSummary: AgentMessage = {
+    id: "summary_0",
+    content: renderContextSummary("Previous durable facts."),
+    contentKind: CONTEXT_SUMMARY_KIND,
+    contextSummary: {
+      coveredMessageCount: 1,
+      coveredUntilMessageId: "msg_1",
+    },
+    createdAt: new Date(0).toISOString(),
+    role: "user",
+  };
+
+  await compressor.maybeCompress({
+    messages: [
+      previousSummary,
+      ...Array.from({ length: 6 }, (_, index) => makeMessage(index + 1)),
+    ],
+    model: "deepseek-test",
+    runId: "run_2",
+    sessionId: "sess_1",
+    signal: new AbortController().signal,
+    userId: "usr_1",
+  });
+
+  assert.equal(sessions.appended.length, 1);
+  assert.deepEqual(sessions.appended[0].contextSummary, {
+    coveredMessageCount: 3,
+    coveredUntilMessageId: "msg_3",
+  });
+  assert.match(modelRouter.prompts[0], /Previous durable facts/);
+  assert.doesNotMatch(modelRouter.prompts[0], /message message .*6/s);
+});
+
+test("ContextCompressor follows the Hermes threshold floor before compacting", async () => {
+  const [{ ContextCompressor }] = await Promise.all([
+    import("@/agent/context/ContextCompressor"),
+  ]);
+  const modelRouter = new FakeModelRouter();
+  const sessions = new FakeSessionRepository();
+  const compressor = new ContextCompressor(
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+  );
+
+  const result = await compressor.maybeCompress({
+    messages: Array.from({ length: 12 }, (_, index) =>
+      makeMessage(index + 1, "not near the model context yet ".repeat(100)),
+    ),
+    model: "deepseek-test",
+    runId: "run_3",
+    sessionId: "sess_1",
+    signal: new AbortController().signal,
+    userId: "usr_1",
+  });
+
+  assert.equal(result.compacted, false);
+  assert.equal(modelRouter.prompts.length, 0);
+  assert.equal(sessions.appended.length, 0);
+});
+
+test("ContextEngine includes latest compacted summary plus uncovered live messages", async () => {
+  const [{ ContextEngine }, { CONTEXT_SUMMARY_KIND, renderContextSummary }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/context/ContextSummary"),
+  ]);
+  const engine = new ContextEngine();
+  const oldSummary: AgentMessage = {
+    id: "summary_old",
+    content: renderContextSummary("old summary"),
+    contentKind: CONTEXT_SUMMARY_KIND,
+    createdAt: new Date(0).toISOString(),
+    role: "user",
+  };
+  const latestSummary: AgentMessage = {
+    id: "summary_latest",
+    content: renderContextSummary("latest summary"),
+    contentKind: CONTEXT_SUMMARY_KIND,
+    contextSummary: {
+      coveredMessageCount: 5,
+      coveredUntilMessageId: "msg_5",
+    },
+    createdAt: new Date(1).toISOString(),
+    role: "user",
+  };
+  const tail = Array.from({ length: 30 }, (_, index) => makeMessage(index + 1, "tail "));
+
+  const context = engine.build({
+    messages: [oldSummary, makeMessage(100), latestSummary, ...tail],
+    promptSnapshot: makePrompt("static system prompt"),
+  });
+
+  assert.equal(context.messages[0].content, "static system prompt");
+  assert.equal(context.messages[1].content, latestSummary.content);
+  assert.equal(context.messages.length, 27);
+  assert.equal(context.messages[2].content, tail[5].content);
+  assert.equal(context.messages.at(-1)?.content, tail.at(-1)?.content);
+  assert.ok(context.messages.every((message) => message.content !== oldSummary.content));
+});

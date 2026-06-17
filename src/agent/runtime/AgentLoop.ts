@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 
+import { ContextCompressor } from "@/agent/context/ContextCompressor";
 import { ContextEngine } from "@/agent/context/ContextEngine";
 import { ModelRouter } from "@/agent/models/ModelRouter";
 import { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
@@ -31,6 +32,7 @@ export class AgentLoop {
     private readonly modelRouter = new ModelRouter(),
     private readonly sessions: SessionRepository = sessionRepository,
     private readonly backgroundReview = new BackgroundReviewAgent(modelRouter, sessions),
+    private readonly contextCompressor = new ContextCompressor(modelRouter, sessions),
   ) {}
 
   async *execute(input: {
@@ -47,6 +49,7 @@ export class AgentLoop {
     yield { type: "run.started", runId: input.runId };
 
     const history = await this.sessions.listMessages(input.sessionId, {
+      limit: 180,
       userId: input.userId,
     });
     const storedPromptSnapshot = await this.sessions.getPromptSnapshot({
@@ -66,8 +69,40 @@ export class AgentLoop {
         }),
         userId: input.userId,
       }));
+    let effectiveHistory = history;
+    try {
+      const compression = await this.contextCompressor.maybeCompress({
+        messages: history,
+        model: input.model,
+        runId: input.runId,
+        sessionId: input.sessionId,
+        signal: input.signal,
+        userId: input.userId,
+      });
+
+      if (compression.compacted && compression.summaryMessageId) {
+        effectiveHistory = compression.messages;
+        await this.sessions.updateRunStatus(input.runId, "compacting");
+        yield {
+          type: "context.compacted",
+          afterTokenEstimate: compression.afterTokenEstimate,
+          beforeTokenEstimate: compression.beforeTokenEstimate,
+          compactedMessageCount: compression.compactedMessageCount,
+          summaryMessageId: compression.summaryMessageId,
+        };
+      }
+    } catch (error) {
+      if (input.signal.aborted) {
+        await this.sessions.updateRunStatus(input.runId, "aborted");
+        yield { type: "run.aborted", runId: input.runId, reason: "client_aborted" };
+        return;
+      }
+
+      console.warn("Context compression skipped after failure", error);
+    }
+
     const context = this.contextEngine.build({
-      messages: history,
+      messages: effectiveHistory,
       model: input.model,
       promptSnapshot,
       provider: "deepseek",
