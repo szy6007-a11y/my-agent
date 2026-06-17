@@ -3,6 +3,7 @@ import type { SessionRepository } from "@/agent/sessions/SessionRepository";
 
 export type ToolExecutionContext = {
   runId: string;
+  signal?: AbortSignal;
   sessionId: string;
   sessions: SessionRepository;
   userId: string;
@@ -11,6 +12,9 @@ export type ToolExecutionContext = {
 export type AgentTool = {
   definition: ModelToolDefinition;
   execute(args: unknown, context: ToolExecutionContext, toolCall: ModelToolCall): Promise<string>;
+  isEnabled?: () => boolean;
+  isReadOnly?: boolean;
+  maxResultSizeChars?: number;
   name: string;
 };
 
@@ -33,4 +37,13 @@ export function toolError(message: string, extra: Record<string, unknown> = {}):
 
 export function toolSuccess(payload: Record<string, unknown>): string {
   return JSON.stringify({ success: true, ...payload });
+}
+
+export function truncateToolResult(result: string, maxChars: number | undefined): string {
+  if (!maxChars || result.length <= maxChars) {
+    return result;
+  }
+
+  const suffix = "\n\n[tool result truncated by runtime]";
+  return `${result.slice(0, Math.max(0, maxChars - suffix.length))}${suffix}`;
 }

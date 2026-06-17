@@ -1,18 +1,32 @@
 import { memoryTool } from "@/agent/tools/MemoryTool";
 import { sessionSearchTool } from "@/agent/tools/SessionSearchTool";
+import { createWebTools } from "@/agent/tools/WebTools";
 import {
   parseToolArguments,
+  truncateToolResult,
   type AgentTool,
   type ToolExecutionContext,
   toolError,
 } from "@/agent/tools/types";
 import type { ModelToolCall, ModelToolDefinition } from "@/agent/runtime/types";
 
+function defaultTools(): AgentTool[] {
+  return [memoryTool, sessionSearchTool, ...createWebTools()];
+}
+
+function toolEnabled(tool: AgentTool): boolean {
+  try {
+    return tool.isEnabled ? tool.isEnabled() : true;
+  } catch {
+    return false;
+  }
+}
+
 export class ToolRegistry {
   private readonly tools: Map<string, AgentTool>;
 
-  constructor(tools: AgentTool[] = [memoryTool, sessionSearchTool]) {
-    this.tools = new Map(tools.map((tool) => [tool.name, tool]));
+  constructor(tools: AgentTool[] = defaultTools()) {
+    this.tools = new Map(tools.filter(toolEnabled).map((tool) => [tool.name, tool]));
   }
 
   get definitions(): ModelToolDefinition[] {
@@ -31,7 +45,7 @@ export class ToolRegistry {
 
     try {
       const args = parseToolArguments(toolCall.arguments);
-      return await tool.execute(args, context, toolCall);
+      return truncateToolResult(await tool.execute(args, context, toolCall), tool.maxResultSizeChars);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Tool execution failed";
       return toolError(message);

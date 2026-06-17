@@ -235,6 +235,7 @@ export class AgentLoop {
 
           const result = await tools.execute(toolCall, {
             runId: input.runId,
+            signal: input.signal,
             sessionId: input.sessionId,
             sessions: this.sessions,
             userId: input.userId,

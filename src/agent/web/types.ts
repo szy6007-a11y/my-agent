@@ -1,0 +1,97 @@
+export type WebCapability = "search" | "extract";
+
+export type WebProviderName =
+  | "brave-free"
+  | "ddgs"
+  | "exa"
+  | "firecrawl"
+  | "parallel"
+  | "searxng"
+  | "tavily";
+
+export type WebSearchResult = {
+  description: string;
+  position: number;
+  title: string;
+  url: string;
+};
+
+export type WebSearchSuccess = {
+  data: {
+    web: WebSearchResult[];
+  };
+  provider: string;
+  query: string;
+  success: true;
+};
+
+export type WebFailure = {
+  error: string;
+  provider?: string;
+  success: false;
+};
+
+export type WebSearchResponse = WebSearchSuccess | WebFailure;
+
+export type WebExtractDocument = {
+  blocked_by_policy?: {
+    host: string;
+    reason: string;
+    source: string;
+  };
+  content?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+  raw_content?: string;
+  title: string;
+  url: string;
+};
+
+export type WebExtractResponse =
+  | {
+      provider: string;
+      results: WebExtractDocument[];
+      success: true;
+    }
+  | WebFailure;
+
+export type WebSearchOptions = {
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type WebExtractOptions = {
+  format?: "html" | "markdown" | "text";
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type WebProviderSetupField = {
+  key: string;
+  prompt: string;
+  url?: string;
+};
+
+export type WebProviderSetupSchema = {
+  badge?: string;
+  envVars: WebProviderSetupField[];
+  name: string;
+  tag?: string;
+};
+
+export type WebSearchProvider = {
+  displayName: string;
+  extract?: (urls: string[], options?: WebExtractOptions) => Promise<WebExtractDocument[]>;
+  getSetupSchema?: () => WebProviderSetupSchema;
+  isAvailable: () => boolean;
+  name: WebProviderName;
+  search?: (
+    query: string,
+    limit: number,
+    options?: WebSearchOptions,
+  ) => Promise<WebSearchResponse>;
+  supportsExtract: () => boolean;
+  supportsSearch: () => boolean;
+};

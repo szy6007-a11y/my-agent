@@ -1,5 +1,22 @@
 import { z } from "zod";
 
+function optionalEnv<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    schema.optional(),
+  );
+}
+
+const webProviderSchema = z.enum([
+  "firecrawl",
+  "parallel",
+  "tavily",
+  "exa",
+  "searxng",
+  "brave-free",
+  "ddgs",
+]);
+
 const serverEnvSchema = z.object({
   APP_ENV: z.enum(["dev", "sit", "prod"]).default("dev"),
   APP_SESSION_SECRET: z.string().min(32).optional(),
@@ -22,6 +39,25 @@ const serverEnvSchema = z.object({
   MEMORY_REVIEW_INTERVAL: z.coerce.number().int().min(0).default(10),
   REDIS_URL: z.string().min(1).optional(),
   USER_MEMORY_CHAR_LIMIT: z.coerce.number().int().positive().optional(),
+  WEB_ALLOW_PRIVATE_URLS: optionalEnv(z.enum(["true", "false"])),
+  WEB_DDGS_ENABLED: optionalEnv(z.enum(["true", "false"])),
+  WEB_EXTRACT_MAX_CHARS: optionalEnv(z.coerce.number().int().positive()),
+  WEB_EXTRACT_MIN_LENGTH: optionalEnv(z.coerce.number().int().min(0)),
+  WEB_EXTRACT_PROVIDER: optionalEnv(webProviderSchema),
+  WEB_EXTRACT_SUMMARIZER_MODEL: optionalEnv(z.string().min(1)),
+  WEB_EXTRACT_TIMEOUT_MS: optionalEnv(z.coerce.number().int().positive()),
+  WEB_PROVIDER: optionalEnv(webProviderSchema),
+  WEB_SEARCH_DEFAULT_LIMIT: optionalEnv(z.coerce.number().int().positive()),
+  WEB_SEARCH_PROVIDER: optionalEnv(webProviderSchema),
+  WEB_SEARCH_TIMEOUT_MS: optionalEnv(z.coerce.number().int().positive()),
+  BRAVE_SEARCH_API_KEY: optionalEnv(z.string().min(1)),
+  EXA_API_KEY: optionalEnv(z.string().min(1)),
+  FIRECRAWL_API_KEY: optionalEnv(z.string().min(1)),
+  FIRECRAWL_API_URL: optionalEnv(z.url()),
+  PARALLEL_API_KEY: optionalEnv(z.string().min(1)),
+  SEARXNG_URL: optionalEnv(z.url()),
+  TAVILY_API_KEY: optionalEnv(z.string().min(1)),
+  TAVILY_BASE_URL: optionalEnv(z.url()),
 });
 
 export const serverEnv = serverEnvSchema.parse(process.env);

@@ -27,4 +27,5 @@ docker compose up -d --build
 
 - `POST /api/agent/runs` 创建 session/run，持久化用户消息，流式输出 DeepSeek 结果，保存 assistant 消息，并追加 run 事件。
 - 前端消费标准化的 Agent 事件，例如 `run.accepted`、`context.built`、`assistant.delta`、`usage.updated` 和 `run.completed`。
-- Tool 执行、审批流程和上下文压缩会留到后续里程碑实现。
+- 已接入 Tool 执行、持久记忆、会话搜索、上下文压缩和 Web 工具。Web 搜索/提取支持 Firecrawl、Parallel、Tavily、Exa、SearXNG、Brave Search 和 DuckDuckGo 风格后端，配置见 `.env.example`。
+- 审批流程会留到后续里程碑实现。
