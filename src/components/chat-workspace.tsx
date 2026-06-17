@@ -3,6 +3,7 @@
 import {
   Activity,
   Check,
+  ChevronDown,
   CircleStop,
   Copy,
   LogOut,
@@ -16,6 +17,7 @@ import {
   Send,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { code as streamdownCode } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
 import type {
@@ -85,6 +87,7 @@ type ServiceLogEvent = {
 };
 
 const MAX_CONSOLE_LOGS = 28;
+const SCROLL_BOTTOM_THRESHOLD = 120;
 
 function parseSseEvent(eventText: string): AgentEvent | null {
   const dataLines = eventText
@@ -197,13 +200,27 @@ function MarkdownMessage({
   return (
     <Streamdown
       className="markdown-content"
-      controls={false}
+      controls={{
+        code: {
+          copy: true,
+          download: false,
+        },
+        mermaid: false,
+        table: false,
+      }}
       dir="auto"
+      isAnimating={isStreaming}
       lineNumbers={false}
       mode={isStreaming ? "streaming" : "static"}
       normalizeHtmlIndentation
       parseIncompleteMarkdown={isStreaming}
+      plugins={{ code: streamdownCode }}
+      shikiTheme={["github-light", "github-light"]}
       skipHtml
+      translations={{
+        copied: "已复制",
+        copyCode: "复制代码",
+      }}
     >
       {content || " "}
     </Streamdown>
@@ -227,12 +244,16 @@ export function ChatWorkspace() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [monitorConnection, setMonitorConnection] =
     useState<MonitorConnection>("connecting");
   const [serviceSnapshot, setServiceSnapshot] =
     useState<ServiceHealthSnapshot | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<ServiceConsoleLog[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const autoScrollRef = useRef(true);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${shortSessionId(sessionId)}` : "尚未创建会话"),
     [sessionId],
@@ -264,6 +285,31 @@ export function ChatWorkspace() {
     [],
   );
 
+  const updateScrollState = useCallback(() => {
+    const element = messagesRef.current;
+
+    if (!element) {
+      setShowScrollToBottom(false);
+      return;
+    }
+
+    const distanceToBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    const isNearBottom = distanceToBottom < SCROLL_BOTTOM_THRESHOLD;
+
+    autoScrollRef.current = isNearBottom;
+    setShowScrollToBottom(!isNearBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    autoScrollRef.current = true;
+    messagesEndRef.current?.scrollIntoView({
+      block: "end",
+      behavior,
+    });
+    setShowScrollToBottom(false);
+  }, []);
+
   const clearWorkspace = useCallback(() => {
     setMessages([]);
     setSessionId(null);
@@ -271,6 +317,8 @@ export function ChatWorkspace() {
     setConsoleLogs([]);
     setMonitorConnection("connecting");
     setServiceSnapshot(null);
+    autoScrollRef.current = true;
+    setShowScrollToBottom(false);
   }, []);
 
   const handleUnauthorized = useCallback(() => {
@@ -299,6 +347,31 @@ export function ChatWorkspace() {
     setAppEnvironment(body.environment);
     setSessions(body.sessions);
   }, [handleUnauthorized]);
+
+  useEffect(() => {
+    const element = messagesRef.current;
+
+    if (!element) {
+      return;
+    }
+
+    updateScrollState();
+    element.addEventListener("scroll", updateScrollState, { passive: true });
+
+    return () => {
+      element.removeEventListener("scroll", updateScrollState);
+    };
+  }, [updateScrollState]);
+
+  useEffect(() => {
+    if (!autoScrollRef.current) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      scrollToBottom("auto");
+    });
+  }, [messages, scrollToBottom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -482,8 +555,10 @@ export function ChatWorkspace() {
 
   function startNewChat() {
     stopStreaming();
+    autoScrollRef.current = true;
     setMessages([]);
     setSessionId(null);
+    setShowScrollToBottom(false);
   }
 
   async function openSession(nextSessionId: string) {
@@ -517,6 +592,7 @@ export function ChatWorkspace() {
       };
 
       setSessionId(nextSessionId);
+      autoScrollRef.current = true;
       setMessages(
         body.messages.map((message) => ({
           content: message.content,
@@ -558,7 +634,8 @@ export function ChatWorkspace() {
       status: "streaming",
     };
 
-    setInput("");
+      setInput("");
+    autoScrollRef.current = true;
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setIsStreaming(true);
 
@@ -947,7 +1024,7 @@ export function ChatWorkspace() {
       </aside>
 
       <section className="workspace">
-        <div className="messages" aria-live="polite">
+        <div className="messages" aria-live="polite" ref={messagesRef}>
           {messages.length === 0 ? (
             <div className="empty-state">
               <h1>今天想做什么？</h1>
@@ -995,7 +1072,20 @@ export function ChatWorkspace() {
               </article>
             ))
           )}
+          <div aria-hidden="true" ref={messagesEndRef} />
         </div>
+
+        {showScrollToBottom && (
+          <button
+            aria-label="回到最新消息"
+            className="scroll-bottom-button"
+            onClick={() => scrollToBottom()}
+            title="回到最新消息"
+            type="button"
+          >
+            <ChevronDown size={22} />
+          </button>
+        )}
 
         <form className="composer" onSubmit={submit}>
           <button className="icon-button" type="button" aria-label="添加附件">

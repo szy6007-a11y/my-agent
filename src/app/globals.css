@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../../node_modules/@streamdown/code/dist/*.js";
 @source "../../node_modules/streamdown/dist/*.js";
 
 :root {
@@ -731,6 +732,86 @@ body > button[aria-label="Open Next.js Dev Tools"],
   padding-left: 12px;
 }
 
+.markdown-content [data-streamdown="code-block"] {
+  gap: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 20px;
+  background: #f3f3f3;
+  margin: 18px 0;
+  padding: 12px;
+}
+
+.markdown-content [data-streamdown="code-block-header"] {
+  height: 34px;
+  align-items: center;
+  color: #171717;
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.markdown-content [data-streamdown="code-block-header"] span {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 3px;
+  text-transform: none;
+}
+
+.markdown-content [data-streamdown="code-block-header"] span::before {
+  color: #1f1f1f;
+  content: "</>";
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.markdown-content [data-streamdown="code-block-actions"] {
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  backdrop-filter: none;
+}
+
+.markdown-content [data-streamdown="code-block-copy-button"] {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 9px;
+  color: #242424;
+  padding: 0;
+}
+
+.markdown-content [data-streamdown="code-block-copy-button"]:hover {
+  background: #e8e8e8;
+}
+
+.markdown-content [data-streamdown="code-block-body"] {
+  overflow-x: auto;
+  border: 0;
+  background: transparent;
+  color: #171717;
+  font-size: 13px;
+  line-height: 1.62;
+  padding: 7px 8px 9px;
+}
+
+.markdown-content [data-streamdown="code-block-body"] pre {
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
 .markdown-content code {
   border-radius: 5px;
   background: #f1f1f1;
@@ -806,6 +887,32 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .message-action-button:focus-visible {
+  outline: 2px solid #9b9b9b;
+  outline-offset: 2px;
+}
+
+.scroll-bottom-button {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  z-index: 20;
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.14);
+  color: #171717;
+  transform: translateX(-50%);
+}
+
+.scroll-bottom-button:hover {
+  background: #f6f6f6;
+}
+
+.scroll-bottom-button:focus-visible {
   outline: 2px solid #9b9b9b;
   outline-offset: 2px;
 }
@@ -897,6 +1004,10 @@ body > button[aria-label="Open Next.js Dev Tools"],
   .composer {
     bottom: 14px;
     width: calc(100% - 20px);
+  }
+
+  .scroll-bottom-button {
+    bottom: 78px;
   }
 
   .mode-button {
