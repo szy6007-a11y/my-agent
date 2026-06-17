@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 
 import { encodeAgentEvent } from "@/agent/events/sse";
@@ -29,6 +30,19 @@ export async function POST(request: NextRequest) {
         for await (const event of runController.startRun(body, request.signal)) {
           controller.enqueue(encoder.encode(encodeAgentEvent(event)));
         }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown agent error";
+        console.error("Failed to start agent run", error);
+        controller.enqueue(
+          encoder.encode(
+            encodeAgentEvent({
+              type: "run.failed",
+              runId: `run_${randomUUID()}`,
+              error: message,
+            }),
+          ),
+        );
       } finally {
         controller.close();
       }
