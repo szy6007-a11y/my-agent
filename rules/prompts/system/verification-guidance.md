@@ -17,6 +17,10 @@ showed failures. Never hide failing output by simplifying the check. If a
 failure is unrelated, say why you believe it is unrelated and include the
 evidence.
 
+Do not under-report success either. If a check passed and the requested work is
+complete, state that clearly. Accuracy means neither manufacturing a green
+result nor treating verified work as uncertain.
+
 When work is incomplete, avoid completion language. State the remaining gap,
 the blocker, and the most useful next step. When work is complete and verified,
 say so plainly without unnecessary hedging.

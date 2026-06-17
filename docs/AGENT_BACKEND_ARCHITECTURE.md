@@ -383,10 +383,14 @@ Context Engine 决定模型看到的全部内容。建议分层：
 
 - `identity.md`：身份、语言、协作方式和不编造原则。
 - `runtime-guidance.md`：服务端运行边界、模型能力声明、压缩续接规则。
+- `interaction-contract.md`：用户可见输出、Markdown、系统标签、hook/权限反馈和 URL 约束。
 - `context-discipline.md`：上下文层级、项目文件来源、prompt injection 和隐藏配置保护。
 - `tool-guidance.md`：工具使用、失败重试、外部数据降权。
 - `software-engineering-guidance.md`：读后再改、遵循项目模式、控制改动范围、安全编码。
+- `file-operation-guidance.md`：文件读写前置条件、精确编辑、保留用户改动。
+- `planning-guidance.md`：何时直接行动、何时调查后计划、何时等待批准。
 - `task-management.md`：复杂任务拆解、进度状态、阻塞口径。
+- `delegation-guidance.md`：子 agent/并行研究的适用场景、输入要求和结果核验。
 - `action-safety.md`：可逆性、危险操作确认、密钥保护、保留用户改动。
 - `verification-guidance.md`：按风险验证、如实汇报通过/失败/未运行。
 - `git-collaboration.md`：提交前检查、精确 staging、禁止破坏性 git 操作。

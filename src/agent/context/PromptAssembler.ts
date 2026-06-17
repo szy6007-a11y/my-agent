@@ -36,7 +36,7 @@ export type PromptAssemblerInput = {
   timeZone?: string;
 };
 
-const PROMPT_VERSION = "2026-06-17.claude-quality-v2";
+const PROMPT_VERSION = "2026-06-17.claude-quality-v3";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 
 function promptFilePath(filename: string): string {
@@ -279,11 +279,15 @@ export class PromptAssembler {
     const stable: PromptSection[] = [
       identity,
       { ...readPromptFragment("runtime-guidance.md"), tag: "runtime_guidance" },
+      { ...readPromptFragment("interaction-contract.md"), tag: "interaction_contract" },
       { ...readPromptFragment("context-discipline.md"), tag: "context_discipline" },
       { ...readPromptFragment("tool-guidance.md"), tag: "tool_guidance" },
       buildAvailableToolsSection(input.availableTools),
       { ...readPromptFragment("software-engineering-guidance.md"), tag: "software_engineering_guidance" },
+      { ...readPromptFragment("file-operation-guidance.md"), tag: "file_operation_guidance" },
+      { ...readPromptFragment("planning-guidance.md"), tag: "planning_guidance" },
       { ...readPromptFragment("task-management.md"), tag: "task_management" },
+      { ...readPromptFragment("delegation-guidance.md"), tag: "delegation_guidance" },
       { ...readPromptFragment("action-safety.md"), tag: "action_safety" },
       { ...readPromptFragment("verification-guidance.md"), tag: "verification_guidance" },
       { ...readPromptFragment("git-collaboration.md"), tag: "git_collaboration" },
