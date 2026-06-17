@@ -30,6 +30,16 @@ function failedToolMessage(result: string): string | null {
   return null;
 }
 
+function removeVisibleText(text: string, removedText: string): string {
+  if (!removedText) {
+    return text;
+  }
+
+  return text.endsWith(removedText) ?
+      text.slice(0, -removedText.length)
+    : text.replace(removedText, "");
+}
+
 export class AgentLoop {
   constructor(
     private readonly contextEngine = new ContextEngine(),
@@ -128,6 +138,8 @@ export class AgentLoop {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
         await this.sessions.updateRunStatus(input.runId, "streaming_model");
         let passText = "";
+        let visiblePassText = "";
+        let passTextMovedToReasoning = false;
         const toolCalls: ModelToolCall[] = [];
 
         for await (const event of this.modelRouter.stream({
@@ -152,6 +164,21 @@ export class AgentLoop {
 
           if (event.type === "text_delta") {
             passText += event.text;
+            if (passTextMovedToReasoning) {
+              yield {
+                type: "reasoning.delta",
+                messageId: assistantMessageId,
+                text: event.text,
+              };
+            } else {
+              visiblePassText += event.text;
+              visibleAssistantText += event.text;
+              yield {
+                type: "assistant.delta",
+                messageId: assistantMessageId,
+                text: event.text,
+              };
+            }
           }
 
           if (event.type === "reasoning_delta") {
@@ -166,6 +193,25 @@ export class AgentLoop {
             toolCalls.push(...event.toolCalls);
           }
 
+          if (event.type === "tool_call_started" && !passTextMovedToReasoning) {
+            passTextMovedToReasoning = true;
+            visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
+            if (visiblePassText) {
+              yield {
+                type: "assistant.delta.retracted",
+                messageId: assistantMessageId,
+                text: visiblePassText,
+              };
+            }
+            if (passText) {
+              yield {
+                type: "reasoning.delta",
+                messageId: assistantMessageId,
+                text: passText,
+              };
+            }
+          }
+
           if (event.type === "usage") {
             yield {
               type: "usage.updated",
@@ -177,13 +223,23 @@ export class AgentLoop {
         }
 
         if (toolCalls.length === 0) {
-          const finalText = passText.trim() ? passText : EMPTY_ASSISTANT_FALLBACK;
-          visibleAssistantText += finalText;
-          yield {
-            type: "assistant.delta",
-            messageId: assistantMessageId,
-            text: finalText,
-          };
+          if (passTextMovedToReasoning && passText.trim()) {
+            visibleAssistantText += passText;
+            yield {
+              type: "assistant.delta",
+              messageId: assistantMessageId,
+              text: passText,
+            };
+          }
+
+          if (!passText.trim() && !visibleAssistantText.trim()) {
+            visibleAssistantText += EMPTY_ASSISTANT_FALLBACK;
+            yield {
+              type: "assistant.delta",
+              messageId: assistantMessageId,
+              text: EMPTY_ASSISTANT_FALLBACK,
+            };
+          }
 
           const finalMessage = await this.sessions.appendMessage({
             content: visibleAssistantText,
@@ -209,6 +265,20 @@ export class AgentLoop {
             runId: input.runId,
           };
           return;
+        }
+
+        if (passText && !passTextMovedToReasoning) {
+          visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
+          yield {
+            type: "assistant.delta.retracted",
+            messageId: assistantMessageId,
+            text: visiblePassText,
+          };
+          yield {
+            type: "reasoning.delta",
+            messageId: assistantMessageId,
+            text: passText,
+          };
         }
 
         workingMessages.push({

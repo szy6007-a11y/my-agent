@@ -669,6 +669,46 @@ body > button[aria-label="Open Next.js Dev Tools"],
   -webkit-background-clip: text;
 }
 
+.message-reasoning {
+  width: min(620px, 100%);
+  color: #737373;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.message-reasoning summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #787878;
+  cursor: pointer;
+  font-weight: 560;
+  list-style: none;
+  user-select: none;
+}
+
+.message-reasoning summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-reasoning summary svg {
+  transition: transform 160ms ease;
+}
+
+.message-reasoning[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.message-reasoning-content {
+  max-height: 220px;
+  margin-top: 8px;
+  overflow: auto;
+  border-left: 2px solid #dedede;
+  padding-left: 10px;
+  color: #686868;
+  white-space: pre-wrap;
+}
+
 .message-content {
   min-width: 0;
   white-space: pre-wrap;

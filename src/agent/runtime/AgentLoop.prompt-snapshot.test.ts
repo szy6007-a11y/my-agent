@@ -81,6 +81,7 @@ class ToolNarrationThenFinalModelRouter {
 
     if (this.calls.length === 1) {
       yield { type: "text_delta" as const, text: "Let me search first." };
+      yield { type: "tool_call_started" as const };
       yield {
         type: "tool_calls" as const,
         toolCalls: [
@@ -94,7 +95,9 @@ class ToolNarrationThenFinalModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "这是最终回答。" };
+    yield { type: "text_delta" as const, text: "这是" };
+    yield { type: "text_delta" as const, text: "最终" };
+    yield { type: "text_delta" as const, text: "回答。" };
   }
 }
 
@@ -159,6 +162,25 @@ async function drain(events: AsyncGenerator<AgentEvent>) {
     result.push(event);
   }
   return result;
+}
+
+function visibleAssistantText(events: AgentEvent[]) {
+  let text = "";
+
+  for (const event of events) {
+    if (event.type === "assistant.delta") {
+      text += event.text;
+    }
+
+    if (event.type === "assistant.delta.retracted") {
+      text =
+        text.endsWith(event.text) ?
+          text.slice(0, -event.text.length)
+        : text.replace(event.text, "");
+    }
+  }
+
+  return text;
 }
 
 test("AgentLoop freezes the session prompt snapshot across runs", async () => {
@@ -250,7 +272,7 @@ test("AgentLoop finalizes without tools after tool round limit", async () => {
   assert.equal(events.at(-1)?.type, "run.completed");
 });
 
-test("AgentLoop hides pre-tool narration from the visible answer", async () => {
+test("AgentLoop folds pre-tool narration into reasoning while streaming the final answer", async () => {
   const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
     import("@/agent/context/ContextEngine"),
     import("@/agent/runtime/AgentLoop"),
@@ -278,20 +300,36 @@ test("AgentLoop hides pre-tool narration from the visible answer", async () => {
       userId: "usr_1",
     }),
   );
-  const deltas = events
+  const deltaTexts = events
     .filter((event): event is Extract<AgentEvent, { type: "assistant.delta" }> =>
       event.type === "assistant.delta",
     )
-    .map((event) => event.text)
-    .join("");
+    .map((event) => event.text);
+  const retractedTexts = events
+    .filter(
+      (event): event is Extract<AgentEvent, { type: "assistant.delta.retracted" }> =>
+        event.type === "assistant.delta.retracted",
+    )
+    .map((event) => event.text);
+  const reasoningTexts = events
+    .filter((event): event is Extract<AgentEvent, { type: "reasoning.delta" }> =>
+      event.type === "reasoning.delta",
+    )
+    .map((event) => event.text);
+  const retractionIndex = events.findIndex((event) => event.type === "assistant.delta.retracted");
+  const firstToolStartIndex = events.findIndex((event) => event.type === "tool.started");
   const toolCallMessage = sessions.messages.find(
     (message) => message.role === "assistant" && message.toolCalls?.length,
   );
 
   assert.equal(modelRouter.calls.length, 2);
   assert.ok(modelRouter.calls.every((toolCount) => toolCount > 0));
-  assert.equal(deltas, "这是最终回答。");
+  assert.deepEqual(deltaTexts, ["Let me search first.", "这是", "最终", "回答。"]);
+  assert.deepEqual(retractedTexts, ["Let me search first."]);
+  assert.deepEqual(reasoningTexts, ["Let me search first."]);
+  assert.ok(retractionIndex >= 0);
+  assert.ok(firstToolStartIndex > retractionIndex);
+  assert.equal(visibleAssistantText(events), "这是最终回答。");
   assert.equal(sessions.messages.at(-1)?.content, "这是最终回答。");
   assert.equal(toolCallMessage?.content, "Let me search first.");
-  assert.doesNotMatch(deltas, /Let me search/);
 });

@@ -113,6 +113,7 @@ export class DeepSeekProviderAdapter implements ProviderAdapter {
     });
 
     const toolCallParts = new Map<number, ToolCallAccumulator>();
+    let reportedToolCallStart = false;
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta as DeepSeekDelta | undefined;
@@ -125,7 +126,13 @@ export class DeepSeekProviderAdapter implements ProviderAdapter {
         yield { type: "text_delta", text: delta.content };
       }
 
-      for (const partial of delta?.tool_calls ?? []) {
+      const partialToolCalls = delta?.tool_calls ?? [];
+      if (partialToolCalls.length > 0 && !reportedToolCallStart) {
+        reportedToolCallStart = true;
+        yield { type: "tool_call_started" };
+      }
+
+      for (const partial of partialToolCalls) {
         const index = partial.index ?? toolCallParts.size;
         const current = toolCallParts.get(index) ?? { arguments: "" };
         current.id = partial.id ?? current.id;

@@ -30,6 +30,7 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  reasoningContent?: string;
   status?: "streaming" | "complete" | "failed" | "aborted";
 };
 
@@ -62,6 +63,7 @@ type AgentEvent =
       summaryMessageId: string;
     }
   | { type: "assistant.delta"; messageId: string; text: string }
+  | { type: "assistant.delta.retracted"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
   | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }
   | { type: "tool.completed"; runId: string; toolCallId: string; toolName: string }
@@ -187,6 +189,36 @@ function appendMessageContent(
   return messages.map((message) =>
     message.id === messageId ?
       { ...message, content: message.content + text }
+    : message,
+  );
+}
+
+function retractMessageContent(
+  messages: ChatMessage[],
+  messageId: string,
+  text: string,
+) {
+  return messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+
+    if (message.content.endsWith(text)) {
+      return { ...message, content: message.content.slice(0, -text.length) };
+    }
+
+    return { ...message, content: message.content.replace(text, "") };
+  });
+}
+
+function appendMessageReasoning(
+  messages: ChatMessage[],
+  messageId: string,
+  text: string,
+) {
+  return messages.map((message) =>
+    message.id === messageId ?
+      { ...message, reasoningContent: `${message.reasoningContent ?? ""}${text}` }
     : message,
   );
 }
@@ -838,6 +870,18 @@ export function ChatWorkspace() {
             );
           }
 
+          if (event.type === "assistant.delta.retracted") {
+            setMessages((current) =>
+              retractMessageContent(current, assistantMessage.id, event.text),
+            );
+          }
+
+          if (event.type === "reasoning.delta") {
+            setMessages((current) =>
+              appendMessageReasoning(current, assistantMessage.id, event.text),
+            );
+          }
+
           if (event.type === "tool.started") {
             appendConsoleLog({
               at: new Date().toISOString(),
@@ -1201,6 +1245,17 @@ export function ChatWorkspace() {
             messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-body">
+                  {message.role === "assistant" && message.reasoningContent?.trim() && (
+                    <details className="message-reasoning">
+                      <summary>
+                        <ChevronDown size={14} aria-hidden="true" />
+                        <span>思考</span>
+                      </summary>
+                      <div className="message-reasoning-content">
+                        {message.reasoningContent}
+                      </div>
+                    </details>
+                  )}
                   {message.role === "assistant" &&
                   message.status === "streaming" &&
                   !message.content.trim() ?

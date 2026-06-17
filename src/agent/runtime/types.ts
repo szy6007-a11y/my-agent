@@ -51,6 +51,7 @@ export type AgentEvent =
       summaryMessageId: string;
     }
   | { type: "assistant.delta"; messageId: string; text: string }
+  | { type: "assistant.delta.retracted"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
   | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }
   | { type: "tool.completed"; runId: string; toolCallId: string; toolName: string }
