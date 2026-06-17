@@ -571,6 +571,13 @@ body > button[aria-label="Open Next.js Dev Tools"],
   padding: 44px max(24px, calc((100vw - 900px) / 2)) 128px;
 }
 
+.messages-bottom-sentinel {
+  width: 100%;
+  height: 1px;
+  flex: 0 0 1px;
+  pointer-events: none;
+}
+
 .empty-state {
   display: grid;
   min-height: calc(100vh - 220px);

@@ -87,7 +87,8 @@ type ServiceLogEvent = {
 };
 
 const MAX_CONSOLE_LOGS = 28;
-const SCROLL_BOTTOM_THRESHOLD = 120;
+const SCROLL_BOTTOM_FALLBACK_THRESHOLD = 96;
+const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px 96px 0px";
 
 function parseSseEvent(eventText: string): AgentEvent | null {
   const dataLines = eventText
@@ -285,21 +286,28 @@ export function ChatWorkspace() {
     [],
   );
 
-  const updateScrollState = useCallback(() => {
+  const updateBottomState = useCallback(
+    (isAtBottom: boolean) => {
+      autoScrollRef.current = isAtBottom;
+      setShowScrollToBottom(messages.length > 0 && !isAtBottom);
+    },
+    [messages.length],
+  );
+
+  const updateScrollStateFromDistance = useCallback(() => {
     const element = messagesRef.current;
 
-    if (!element) {
+    if (!element || messages.length === 0) {
+      autoScrollRef.current = true;
       setShowScrollToBottom(false);
       return;
     }
 
     const distanceToBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight;
-    const isNearBottom = distanceToBottom < SCROLL_BOTTOM_THRESHOLD;
 
-    autoScrollRef.current = isNearBottom;
-    setShowScrollToBottom(!isNearBottom);
-  }, []);
+    updateBottomState(distanceToBottom <= SCROLL_BOTTOM_FALLBACK_THRESHOLD);
+  }, [messages.length, updateBottomState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     autoScrollRef.current = true;
@@ -355,22 +363,53 @@ export function ChatWorkspace() {
       return;
     }
 
-    updateScrollState();
-    element.addEventListener("scroll", updateScrollState, { passive: true });
+    const target = messagesEndRef.current;
+
+    if (!target || !("IntersectionObserver" in window)) {
+      updateScrollStateFromDistance();
+      element.addEventListener("scroll", updateScrollStateFromDistance, {
+        passive: true,
+      });
+
+      return () => {
+        element.removeEventListener("scroll", updateScrollStateFromDistance);
+      };
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) {
+          return;
+        }
+
+        updateBottomState(entry.isIntersecting);
+      },
+      {
+        root: element,
+        rootMargin: SCROLL_BOTTOM_ROOT_MARGIN,
+        threshold: 0,
+      },
+    );
+
+    observer.observe(target);
 
     return () => {
-      element.removeEventListener("scroll", updateScrollState);
+      observer.disconnect();
     };
-  }, [updateScrollState]);
+  }, [updateBottomState, updateScrollStateFromDistance]);
 
   useEffect(() => {
     if (!autoScrollRef.current) {
       return;
     }
 
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
       scrollToBottom("auto");
     });
+
+    return () => {
+      cancelAnimationFrame(frame);
+    };
   }, [messages, scrollToBottom]);
 
   useEffect(() => {
@@ -634,7 +673,7 @@ export function ChatWorkspace() {
       status: "streaming",
     };
 
-      setInput("");
+    setInput("");
     autoScrollRef.current = true;
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setIsStreaming(true);
@@ -1072,7 +1111,11 @@ export function ChatWorkspace() {
               </article>
             ))
           )}
-          <div aria-hidden="true" ref={messagesEndRef} />
+          <div
+            aria-hidden="true"
+            className="messages-bottom-sentinel"
+            ref={messagesEndRef}
+          />
         </div>
 
         {showScrollToBottom && (
