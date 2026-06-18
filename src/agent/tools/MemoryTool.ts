@@ -48,6 +48,9 @@ export const memoryTool: AgentTool = {
       },
     },
   },
+  isReadOnly: false,
+  requiresApproval: true,
+  risk: "write",
   async execute(args, context) {
     const input = asMemoryArgs(args);
     const target = input.target ?? "memory";

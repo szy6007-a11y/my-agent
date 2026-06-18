@@ -1,7 +1,13 @@
-import type { ModelToolCall, ModelToolDefinition } from "@/agent/runtime/types";
+import type {
+  ModelToolCall,
+  ModelToolDefinition,
+  PermissionMode,
+  ToolRisk,
+} from "@/agent/runtime/types";
 import type { SessionRepository } from "@/agent/sessions/SessionRepository";
 
 export type ToolExecutionContext = {
+  permissionMode?: PermissionMode;
   runId: string;
   signal?: AbortSignal;
   sessionId: string;
@@ -16,6 +22,8 @@ export type AgentTool = {
   isReadOnly?: boolean;
   maxResultSizeChars?: number;
   name: string;
+  requiresApproval?: boolean;
+  risk?: ToolRisk;
 };
 
 export function parseToolArguments(raw: string): unknown {

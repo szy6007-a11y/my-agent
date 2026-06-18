@@ -21,10 +21,10 @@ scripts/deploy-local.sh
 部署脚本会执行：
 
 ```bash
-docker compose up -d --build --remove-orphans
+docker compose up -d --build --remove-orphans --renew-anon-volumes
 ```
 
-然后访问 `http://127.0.0.1:${APP_PORT}/` 做冒烟检查。
+`--renew-anon-volumes` 用来刷新 `/app/node_modules` 匿名卷，避免旧卷遮住新镜像中的依赖。`web` 容器启动命令会先运行 `npm run db:migrate` 与 `npm run db:smoke`，通过后才启动 Next.js。随后部署脚本访问 `http://127.0.0.1:${APP_PORT}/` 做 HTTP 冒烟检查。
 
 部署 job 会使用与分支同名的 GitHub Environment：`dev`、`sit`、`prod`。如果后续需要分环境密钥，可以分别在这些 Environment 下配置同名 Secret。
 

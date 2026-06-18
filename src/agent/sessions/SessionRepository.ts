@@ -14,6 +14,7 @@ import type { PromptAssembly } from "@/agent/context/PromptAssembler";
 import { CONTEXT_SUMMARY_KIND } from "@/agent/context/ContextSummary";
 import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
+import { assertDatabaseMigrated } from "@/server/db/readiness";
 
 type StoredMessageRow = {
   id: string;
@@ -101,140 +102,8 @@ export type SessionDiscoveryResult = SessionWindowResult & {
   rank: number | null;
 };
 
-let schemaPromise: Promise<void> | null = null;
-
-async function ensureSchema() {
-  const db = getSql();
-
-  await db`
-    create table if not exists sessions (
-      id text primary key,
-      environment text not null,
-      user_id text not null,
-      title text not null,
-      status text not null default 'active',
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now()
-    )
-  `;
-
-  await db`
-    create table if not exists messages (
-      id text primary key,
-      session_id text not null references sessions(id) on delete cascade,
-      role text not null,
-      content_json jsonb not null,
-      tool_call_id text,
-      tool_name text,
-      token_count integer,
-      created_at timestamptz not null default now()
-    )
-  `;
-
-  await db`
-    create table if not exists agent_runs (
-      id text primary key,
-      environment text not null,
-      session_id text not null references sessions(id) on delete cascade,
-      user_id text not null,
-      status text not null,
-      model text not null,
-      permission_mode text not null,
-      started_at timestamptz,
-      ended_at timestamptz,
-      error_json jsonb,
-      created_at timestamptz not null default now()
-    )
-  `;
-
-  await db`
-    create table if not exists run_events (
-      id bigserial primary key,
-      run_id text not null references agent_runs(id) on delete cascade,
-      type text not null,
-      payload_json jsonb not null,
-      created_at timestamptz not null default now()
-    )
-  `;
-
-  await db`
-    alter table sessions
-    add column if not exists environment text
-  `;
-
-  await db`
-    update sessions
-    set environment = ${serverEnv.APP_ENV}
-    where environment is null
-  `;
-
-  await db`
-    alter table sessions
-    alter column environment set not null
-  `;
-
-  await db`
-    alter table agent_runs
-    add column if not exists environment text
-  `;
-
-  await db`
-    update agent_runs
-    set environment = ${serverEnv.APP_ENV}
-    where environment is null
-  `;
-
-  await db`
-    alter table agent_runs
-    alter column environment set not null
-  `;
-
-  await db`
-    alter table messages
-    add column if not exists tool_name text
-  `;
-
-  await db`
-    alter table sessions
-    add column if not exists prompt_snapshot_json jsonb
-  `;
-
-  await db`
-    alter table sessions
-    add column if not exists prompt_snapshot_created_at timestamptz
-  `;
-
-  await db`
-    create index if not exists messages_session_created_idx
-    on messages(session_id, created_at)
-  `;
-
-  await db`
-    create index if not exists messages_content_fts_idx
-    on messages using gin (
-      to_tsvector('simple', coalesce(content_json->>'text', ''))
-    )
-  `;
-
-  await db`
-    create index if not exists run_events_run_created_idx
-    on run_events(run_id, created_at)
-  `;
-
-  await db`
-    create index if not exists sessions_environment_user_updated_idx
-    on sessions(environment, user_id, updated_at desc)
-  `;
-
-  await db`
-    create index if not exists agent_runs_environment_session_created_idx
-    on agent_runs(environment, session_id, created_at desc)
-  `;
-}
-
 async function ready() {
-  schemaPromise ??= ensureSchema();
-  await schemaPromise;
+  await assertDatabaseMigrated();
 }
 
 function toJson(value: unknown): postgres.JSONValue {
@@ -490,6 +359,39 @@ export class SessionRepository {
     `;
 
     return { id };
+  }
+
+  async updateMessageContent(input: {
+    content: string;
+    messageId: string;
+    sessionId: string;
+    userId: string;
+  }) {
+    await ready();
+    const db = getSql();
+    const rows = await db<{ id: string }[]>`
+      update messages m
+      set content_json = jsonb_set(
+        m.content_json,
+        '{text}',
+        to_jsonb(${input.content}::text),
+        true
+      )
+      where m.id = ${input.messageId}
+        and m.session_id = ${input.sessionId}
+        and exists (
+          select 1
+          from sessions s
+          where s.id = m.session_id
+            and s.user_id = ${input.userId}
+            and s.environment = ${serverEnv.APP_ENV}
+        )
+      returning m.id
+    `;
+
+    if (!rows[0]) {
+      throw new Error("Message not found or not writable by user");
+    }
   }
 
   async listMessages(

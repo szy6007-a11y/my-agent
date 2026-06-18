@@ -521,7 +521,7 @@ type PermissionDecision =
 审批流程：
 
 1. ToolScheduler 调用 PermissionEngine。
-2. 若返回 `ask`，run 状态变为 `waiting_approval`，向客户端发 `approval.requested`。
+2. 若返回 `ask`，run 状态变为 `waiting_approval`，向客户端发 `tool.approval.required` 与 `tool.confirmation.required`。
 3. 用户调用 `POST /api/agent/approvals/:id/resolve`。
 4. Scheduler 继续或生成 tool error message。
 5. 所有决策写入 audit log。
@@ -574,20 +574,26 @@ audit_events(id, actor_id, session_id, run_id, action, payload_json, created_at)
 ## 14. 事件流协议
 
 前端不要消费 provider 原始 chunk，应消费统一事件。
+当前 TypeScript source of truth 是 `src/shared/agent-protocol.ts`，前端和后端都应从这里复用事件类型。
 
 ```ts
 type AgentEvent =
   | { type: "run.accepted"; runId: string; sessionId: string }
   | { type: "run.started"; runId: string }
   | { type: "context.built"; snapshotId: string; tokenEstimate: number }
+  | { type: "system.reminder.persisted"; messageId: string; runId: string; sanitized: boolean }
+  | { type: "context.compaction.started"; beforeTokenEstimate: number; reason: "proactive" | "reactive" }
+  | { type: "context.compacted"; summaryMessageId: string; compactedMessageCount: number; reason?: "proactive" | "reactive" }
+  | { type: "payload.sanitized"; runId: string; insertedMissingToolResults: number; removedOrphanToolResults: number; invalidToolArguments: number }
+  | { type: "protocol.recovery"; runId: string; reason: "visible_tool_call" | "duplicate_answer_prefix" | "context_too_long"; retryAttempt: number; toolName?: string }
   | { type: "assistant.delta"; messageId: string; text: string }
+  | { type: "assistant.delta.retracted"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
-  | { type: "tool.call.created"; toolCallId: string; name: string; inputPreview: unknown }
-  | { type: "tool.call.started"; toolCallId: string }
-  | { type: "tool.call.progress"; toolCallId: string; message: string; data?: unknown }
-  | { type: "approval.requested"; approvalId: string; toolCallId: string; summary: string; risk: string[] }
-  | { type: "tool.call.completed"; toolCallId: string; outputPreview: unknown; artifactIds?: string[] }
-  | { type: "tool.call.failed"; toolCallId: string; error: string }
+  | { type: "tool.started"; runId: string; toolCallId: string; toolName: string; argumentsPreview?: string }
+  | { type: "tool.approval.required"; runId: string; approvalId: string; toolCallId: string; toolName: string; reason: string; risk: string }
+  | { type: "tool.confirmation.required"; runId: string; confirmationId: string; toolCallId: string; toolName: string; message: string }
+  | { type: "tool.completed"; runId: string; toolCallId: string; toolName: string; durationMs?: number; resultPreview?: string }
+  | { type: "tool.failed"; runId: string; toolCallId: string; toolName: string; durationMs?: number; error: string }
   | { type: "usage.updated"; inputTokens?: number; outputTokens?: number; costUsd?: number }
   | { type: "run.completed"; runId: string; finalMessageId: string }
   | { type: "run.failed"; runId: string; error: string }

@@ -3,6 +3,7 @@ import type { NextRequest, NextResponse } from "next/server";
 
 import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
+import { assertDatabaseMigrated } from "@/server/db/readiness";
 
 const SESSION_TOKEN_BYTES = 32;
 const LOGIN_WINDOW_MINUTES = 10;
@@ -35,8 +36,6 @@ export type AuthContext = {
   sessionId: string;
   user: AuthUser;
 };
-
-let schemaPromise: Promise<void> | null = null;
 
 function authCookieName() {
   return `my-agent-session-${serverEnv.APP_ENV}`;
@@ -97,104 +96,8 @@ function toAuthUser(row: AuthUserRow): AuthUser {
   };
 }
 
-async function ensureAuthSchema() {
-  const db = getSql();
-
-  await db`
-    create table if not exists beta_users (
-      id text primary key,
-      environment text not null,
-      invite_code_hash text not null,
-      login_id_hash text,
-      display_name text,
-      status text not null default 'active',
-      created_at timestamptz not null default now(),
-      last_seen_at timestamptz not null default now()
-    )
-  `;
-
-  await db`
-    alter table beta_users
-    add column if not exists login_id_hash text
-  `;
-
-  await db`
-    update beta_users
-    set login_id_hash = md5(${serverEnv.APP_ENV} || ':legacy-login:' || id)
-    where login_id_hash is null
-  `;
-
-  await db`
-    alter table beta_users
-    alter column login_id_hash set not null
-  `;
-
-  await db`
-    alter table beta_users
-    drop constraint if exists beta_users_environment_invite_code_hash_key
-  `;
-
-  await db`
-    create table if not exists auth_sessions (
-      id text primary key,
-      environment text not null,
-      user_id text not null references beta_users(id) on delete cascade,
-      token_hash text not null,
-      expires_at timestamptz not null,
-      created_at timestamptz not null default now(),
-      last_seen_at timestamptz not null default now(),
-      revoked_at timestamptz,
-      user_agent text,
-      unique (environment, token_hash)
-    )
-  `;
-
-  await db`
-    update auth_sessions s
-    set revoked_at = now()
-    from beta_users u
-    where s.user_id = u.id
-      and s.environment = ${serverEnv.APP_ENV}
-      and u.environment = ${serverEnv.APP_ENV}
-      and u.login_id_hash = md5(${serverEnv.APP_ENV} || ':legacy-login:' || u.id)
-      and s.revoked_at is null
-  `;
-
-  await db`
-    create table if not exists auth_login_attempts (
-      id bigserial primary key,
-      environment text not null,
-      bucket text not null,
-      success boolean not null,
-      attempted_at timestamptz not null default now()
-    )
-  `;
-
-  await db`
-    create index if not exists auth_sessions_environment_token_idx
-    on auth_sessions(environment, token_hash)
-  `;
-
-  await db`
-    create unique index if not exists beta_users_environment_login_id_hash_idx
-    on beta_users(environment, login_id_hash)
-  `;
-
-  await db`
-    create index if not exists auth_sessions_user_active_idx
-    on auth_sessions(environment, user_id, expires_at)
-    where revoked_at is null
-  `;
-
-  await db`
-    create index if not exists auth_login_attempts_bucket_idx
-    on auth_login_attempts(environment, bucket, attempted_at desc)
-  `;
-}
-
 async function ready() {
-  schemaPromise ??= ensureAuthSchema();
-  await schemaPromise;
+  await assertDatabaseMigrated();
 }
 
 async function failedAttemptsInWindow(bucket: string) {

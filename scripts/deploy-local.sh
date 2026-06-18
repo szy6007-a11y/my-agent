@@ -60,7 +60,7 @@ read_app_port() {
 ensure_env_file
 
 log "Building and starting Docker Compose services."
-docker compose up -d --build --remove-orphans
+docker compose up -d --build --remove-orphans --renew-anon-volumes
 
 app_port="$(read_app_port)"
 attempts="${DEPLOY_SMOKE_ATTEMPTS:-30}"

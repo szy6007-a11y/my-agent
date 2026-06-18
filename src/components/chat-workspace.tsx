@@ -25,6 +25,7 @@ import type {
   ServiceHealthState,
   ServiceHealthStatus,
 } from "@/lib/service-health";
+import type { AgentEvent } from "@/shared/agent-protocol";
 
 type ChatMessage = {
   id: string;
@@ -50,28 +51,6 @@ type ChatSession = {
   updatedAt: string;
   messageCount: number;
 };
-
-type AgentEvent =
-  | { type: "run.accepted"; runId: string; sessionId: string }
-  | { type: "run.started"; runId: string }
-  | { type: "context.built"; snapshotId: string; tokenEstimate: number }
-  | {
-      type: "context.compacted";
-      afterTokenEstimate: number;
-      beforeTokenEstimate: number;
-      compactedMessageCount: number;
-      summaryMessageId: string;
-    }
-  | { type: "assistant.delta"; messageId: string; text: string }
-  | { type: "assistant.delta.retracted"; messageId: string; text: string }
-  | { type: "reasoning.delta"; messageId: string; text: string }
-  | { type: "tool.started"; runId: string; toolCallId: string; toolName: string }
-  | { type: "tool.completed"; runId: string; toolCallId: string; toolName: string }
-  | { type: "tool.failed"; runId: string; toolCallId: string; toolName: string; error: string }
-  | { type: "usage.updated"; inputTokens?: number; outputTokens?: number; totalTokens?: number }
-  | { type: "run.completed"; runId: string; finalMessageId: string }
-  | { type: "run.failed"; runId: string; error: string }
-  | { type: "run.aborted"; runId: string; reason: string };
 
 type MonitorConnection = "connecting" | "connected" | "disconnected";
 
@@ -855,12 +834,54 @@ export function ChatWorkspace() {
             });
           }
 
+          if (event.type === "system.reminder.persisted") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: event.sanitized ? "系统提醒已固化，用户控制标记已净化" : "系统提醒已固化",
+            });
+          }
+
+          if (event.type === "context.compaction.started") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message:
+                event.reason === "reactive" ?
+                  "上下文过长，开始恢复性压缩"
+                : "开始压缩上下文",
+            });
+          }
+
           if (event.type === "context.compacted") {
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
               source: "agent",
               message: `上下文已压缩，折叠 ${event.compactedMessageCount} 条历史`,
+            });
+          }
+
+          if (event.type === "payload.sanitized") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "warn",
+              source: "agent",
+              message: `模型载荷已修复：补 ${event.insertedMissingToolResults}、移除 ${event.removedOrphanToolResults}`,
+            });
+          }
+
+          if (event.type === "protocol.recovery") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "warn",
+              source: "agent",
+              message:
+                event.toolName ?
+                  `模型协议恢复重试：${event.toolName}`
+                : "模型协议恢复重试",
             });
           }
 
@@ -888,6 +909,24 @@ export function ChatWorkspace() {
               level: "info",
               source: "tool",
               message: `工具开始 ${event.toolName}`,
+            });
+          }
+
+          if (event.type === "tool.approval.required") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "warn",
+              source: "tool",
+              message: `工具需要确认 ${event.toolName}：${event.reason}`,
+            });
+          }
+
+          if (event.type === "tool.confirmation.required") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "warn",
+              source: "tool",
+              message: `等待确认 ${event.toolName}：${event.message}`,
             });
           }
 

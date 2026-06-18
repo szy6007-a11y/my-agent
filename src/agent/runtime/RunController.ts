@@ -40,7 +40,7 @@ export class RunController {
     }
 
     await this.sessions.touchSession(session.id, userId);
-    await this.sessions.appendMessage({
+    const userMessage = await this.sessions.appendMessage({
       content: request.message,
       role: "user",
       sessionId: session.id,
@@ -58,10 +58,12 @@ export class RunController {
     for await (const event of this.loop.execute({
       maxTokens,
       model,
+      permissionMode,
       runId: run.id,
       sessionId: session.id,
       signal,
       thinking,
+      userMessageId: userMessage.id,
       userId,
     })) {
       yield* this.emit(run.id, event);

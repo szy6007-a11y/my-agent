@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "ci": "npm run lint && npm run typecheck && npm run test",
+    "db:migrate": "tsx src/server/db/migrate.ts",
+    "db:smoke": "tsx src/server/db/smoke.ts",
     "start": "next start",
     "lint": "eslint .",
     "test": "tsx --test \"src/**/*.test.ts\"",

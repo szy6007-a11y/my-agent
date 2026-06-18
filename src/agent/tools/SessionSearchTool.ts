@@ -88,6 +88,7 @@ export const sessionSearchTool: AgentTool = {
       },
     },
   },
+  isReadOnly: true,
   async execute(args, context) {
     const input = asArgs(args);
     const limit = clampInt(input.limit, 3, 1, 10);

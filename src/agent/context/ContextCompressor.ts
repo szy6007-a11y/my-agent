@@ -295,6 +295,7 @@ export class ContextCompressor {
   }
 
   async maybeCompress(input: {
+    force?: boolean;
     messages: AgentMessage[];
     model: string;
     runId: string;
@@ -311,7 +312,7 @@ export class ContextCompressor {
       messages: input.messages,
     };
 
-    if (beforeTokenEstimate < this.thresholdTokens) {
+    if (!input.force && beforeTokenEstimate < this.thresholdTokens) {
       return unchanged;
     }
 

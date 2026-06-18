@@ -1,17 +1,43 @@
 import { randomUUID } from "crypto";
 
-import { ContextCompressor } from "@/agent/context/ContextCompressor";
+import {
+  ContextCompressor,
+  estimateAgentMessages,
+} from "@/agent/context/ContextCompressor";
 import { ContextEngine } from "@/agent/context/ContextEngine";
 import { ModelRouter } from "@/agent/models/ModelRouter";
 import { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
-import type { AgentEvent, ModelMessage, ModelToolCall } from "@/agent/runtime/types";
+import { sanitizeModelMessages } from "@/agent/runtime/PayloadSanitizer";
+import {
+  applyRuntimeReminder,
+  previewToolArguments,
+  previewToolResult,
+} from "@/agent/runtime/SystemReminder";
+import {
+  createDefaultHookRegistry,
+  type AgentHookRegistry,
+} from "@/agent/runtime/hooks";
+import type {
+  AgentEvent,
+  AgentMessage,
+  ModelMessage,
+  ModelToolCall,
+  PermissionMode,
+  ToolRisk,
+} from "@/agent/runtime/types";
 import {
   sessionRepository,
   type SessionRepository,
 } from "@/agent/sessions/SessionRepository";
 import { ToolRegistry } from "@/agent/tools/ToolRegistry";
+import {
+  parseToolArguments,
+  toolError,
+  type AgentTool,
+} from "@/agent/tools/types";
 
 const MAX_TOOL_ROUNDS = 6;
+const MAX_PROTOCOL_RECOVERY_ATTEMPTS = 1;
 const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
   "工具调用轮次已经达到上限。请停止调用工具，基于上面已经返回的工具结果给出当前可支持的最终回答；如果证据不足，请说明限制和已经查到的信息。";
 const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
@@ -40,6 +66,94 @@ function removeVisibleText(text: string, removedText: string): string {
     : text.replace(removedText, "");
 }
 
+function latestUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") {
+      return messages[index];
+    }
+  }
+
+  return undefined;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function detectVisibleToolProtocolViolation(
+  text: string,
+  toolNames: string[],
+): string | null {
+  if (!text.trim()) {
+    return null;
+  }
+
+  for (const toolName of toolNames) {
+    const escaped = escapeRegExp(toolName);
+    const patterns = [
+      new RegExp(`<\\s*${escaped}\\b`, "i"),
+      new RegExp(`<\\s*tool\\b[^>]*>\\s*${escaped}\\b`, "i"),
+      new RegExp(`\\b${escaped}\\s*\\(\\s*[{\\[]`, "i"),
+    ];
+
+    if (patterns.some((pattern) => pattern.test(text))) {
+      return toolName;
+    }
+  }
+
+  return null;
+}
+
+function buildProtocolCorrection(toolName: string): string {
+  return `上一轮模型在正文中手写了工具调用 ${toolName}，这不是有效协议。请重新处理当前请求：如果确实需要 ${toolName}，必须使用原生 tool call；如果不需要工具，请直接给出中文正文。不要在正文里输出工具 JSON、XML、函数调用文本或内部协议。`;
+}
+
+function isContextOverflowError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    status?: unknown;
+  };
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  const code = typeof candidate.code === "string" ? candidate.code : "";
+
+  return (
+    candidate.status === 413 ||
+    /context(_|-)?too(_|-)?long/i.test(code) ||
+    /maximum context|context length|prompt too long|context.*too long/i.test(message)
+  );
+}
+
+function toolRisk(tool: AgentTool | undefined): ToolRisk {
+  return tool?.risk ?? (tool?.isReadOnly ? "read" : "write");
+}
+
+function toolNeedsApproval(tool: AgentTool | undefined, permissionMode: PermissionMode): boolean {
+  if (!tool) {
+    return false;
+  }
+
+  if (permissionMode === "bypass") {
+    return false;
+  }
+
+  if (tool.isReadOnly === true) {
+    return false;
+  }
+
+  return (
+    permissionMode === "read-only" ||
+    permissionMode === "ask-on-write" ||
+    permissionMode === "plan" ||
+    permissionMode === "auto-safe" ||
+    tool.requiresApproval === true
+  );
+}
+
 export class AgentLoop {
   constructor(
     private readonly contextEngine = new ContextEngine(),
@@ -47,6 +161,7 @@ export class AgentLoop {
     private readonly sessions: SessionRepository = sessionRepository,
     private readonly backgroundReview = new BackgroundReviewAgent(modelRouter, sessions),
     private readonly contextCompressor = new ContextCompressor(modelRouter, sessions),
+    private readonly hooks: AgentHookRegistry = createDefaultHookRegistry(),
   ) {}
 
   async *execute(input: {
@@ -54,18 +169,60 @@ export class AgentLoop {
     sessionId: string;
     model: string;
     maxTokens: number;
+    permissionMode?: PermissionMode;
+    reactiveCompactionAttempted?: boolean;
     userId: string;
+    userMessageId?: string;
     thinking: "enabled" | "disabled";
     signal: AbortSignal;
   }): AsyncGenerator<AgentEvent> {
     const tools = new ToolRegistry();
+    const permissionMode = input.permissionMode ?? "ask-on-write";
     await this.sessions.updateRunStatus(input.runId, "streaming_model");
     yield { type: "run.started", runId: input.runId };
 
-    const history = await this.sessions.listMessages(input.sessionId, {
+    let history = await this.sessions.listMessages(input.sessionId, {
       limit: 180,
       userId: input.userId,
     });
+    const preModelHookResult = await this.hooks.runPreModelCall({
+      iteration: 0,
+      lastUserMessage:
+        history.find((message) => message.id === input.userMessageId) ??
+        latestUserMessage(history),
+      messages: history,
+      model: input.model,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      toolNames: tools.names,
+      userId: input.userId,
+    });
+    const reminder = applyRuntimeReminder({
+      hookReminders: preModelHookResult.reminders,
+      messages: history,
+      model: input.model,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      targetMessageId: input.userMessageId,
+      toolNames: tools.names,
+      userId: input.userId,
+    });
+
+    if (reminder.changed && reminder.targetMessage) {
+      await this.sessions.updateMessageContent({
+        content: reminder.targetMessage.content,
+        messageId: reminder.targetMessage.id,
+        sessionId: input.sessionId,
+        userId: input.userId,
+      });
+      history = reminder.messages;
+      yield {
+        type: "system.reminder.persisted",
+        messageId: reminder.targetMessage.id,
+        runId: input.runId,
+        sanitized: reminder.sanitized || preModelHookResult.lastUserContentRewritten,
+      };
+    }
     const storedPromptSnapshot = await this.sessions.getPromptSnapshot({
       sessionId: input.sessionId,
       userId: input.userId,
@@ -95,6 +252,12 @@ export class AgentLoop {
       });
 
       if (compression.compacted && compression.summaryMessageId) {
+        await this.hooks.runPreCompact({
+          reason: "proactive",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          userId: input.userId,
+        });
         effectiveHistory = compression.messages;
         await this.sessions.updateRunStatus(input.runId, "compacting");
         yield {
@@ -102,8 +265,17 @@ export class AgentLoop {
           afterTokenEstimate: compression.afterTokenEstimate,
           beforeTokenEstimate: compression.beforeTokenEstimate,
           compactedMessageCount: compression.compactedMessageCount,
+          reason: "proactive",
           summaryMessageId: compression.summaryMessageId,
         };
+        await this.hooks.runPostCompact({
+          messagesCompacted: compression.compactedMessageCount,
+          messagesRetained: compression.messages.length - compression.compactedMessageCount,
+          reason: "proactive",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          userId: input.userId,
+        });
       }
     } catch (error) {
       if (input.signal.aborted) {
@@ -131,8 +303,9 @@ export class AgentLoop {
     };
 
     const assistantMessageId = `msg_${randomUUID()}`;
-    const workingMessages: ModelMessage[] = [...context.messages];
+    let workingMessages: ModelMessage[] = [...context.messages];
     let visibleAssistantText = "";
+    let protocolRecoveryAttempts = 0;
 
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -141,6 +314,17 @@ export class AgentLoop {
         let visiblePassText = "";
         let passTextMovedToReasoning = false;
         const toolCalls: ModelToolCall[] = [];
+        const sanitizedPayload = sanitizeModelMessages(workingMessages);
+        if (sanitizedPayload.changed) {
+          workingMessages = sanitizedPayload.messages;
+          yield {
+            type: "payload.sanitized",
+            insertedMissingToolResults: sanitizedPayload.stats.insertedMissingToolResults,
+            invalidToolArguments: sanitizedPayload.stats.invalidToolArguments,
+            removedOrphanToolResults: sanitizedPayload.stats.removedOrphanToolResults,
+            runId: input.runId,
+          };
+        }
 
         for await (const event of this.modelRouter.stream({
           context: {
@@ -223,6 +407,34 @@ export class AgentLoop {
         }
 
         if (toolCalls.length === 0) {
+          const visibleToolCall = detectVisibleToolProtocolViolation(passText, tools.names);
+          if (
+            visibleToolCall &&
+            protocolRecoveryAttempts < MAX_PROTOCOL_RECOVERY_ATTEMPTS
+          ) {
+            protocolRecoveryAttempts += 1;
+            if (!passTextMovedToReasoning && visiblePassText) {
+              visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
+              yield {
+                type: "assistant.delta.retracted",
+                messageId: assistantMessageId,
+                text: visiblePassText,
+              };
+            }
+            workingMessages.push({
+              role: "user",
+              content: buildProtocolCorrection(visibleToolCall),
+            });
+            yield {
+              type: "protocol.recovery",
+              reason: "visible_tool_call",
+              retryAttempt: protocolRecoveryAttempts,
+              runId: input.runId,
+              toolName: visibleToolCall,
+            };
+            continue;
+          }
+
           if (passTextMovedToReasoning && passText.trim()) {
             visibleAssistantText += passText;
             yield {
@@ -238,6 +450,32 @@ export class AgentLoop {
               type: "assistant.delta",
               messageId: assistantMessageId,
               text: EMPTY_ASSISTANT_FALLBACK,
+            };
+          }
+
+          const postModelResponse = await this.hooks.runPostModelResponse({
+            content: visibleAssistantText,
+            iteration: round + 1,
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCalls: [],
+            userId: input.userId,
+          });
+          if (postModelResponse.deny) {
+            const replacement =
+              postModelResponse.deny.userMessage ?? "模型输出未通过运行时检查，请换个问法再试。";
+            if (visibleAssistantText) {
+              yield {
+                type: "assistant.delta.retracted",
+                messageId: assistantMessageId,
+                text: visibleAssistantText,
+              };
+            }
+            visibleAssistantText = replacement;
+            yield {
+              type: "assistant.delta",
+              messageId: assistantMessageId,
+              text: replacement,
             };
           }
 
@@ -259,6 +497,13 @@ export class AgentLoop {
             .catch((error) => {
               console.error("Background memory review failed", error);
             });
+          await this.hooks.runMessageEnd({
+            runId: input.runId,
+            sessionId: input.sessionId,
+            success: true,
+            totalIterations: round + 1,
+            userId: input.userId,
+          });
           yield {
             type: "run.completed",
             finalMessageId: finalMessage.id,
@@ -304,47 +549,127 @@ export class AgentLoop {
 
           yield {
             type: "tool.started",
+            argumentsPreview: previewToolArguments(toolCall),
             runId: input.runId,
             toolCallId: toolCall.id,
             toolName: toolCall.name,
           };
 
-          const result = await tools.execute(toolCall, {
+          const tool = tools.get(toolCall.name);
+          const risk = toolRisk(tool);
+          let parsedInput: unknown = {};
+          try {
+            parsedInput = parseToolArguments(toolCall.arguments);
+          } catch {
+            parsedInput = {};
+          }
+          const preToolResult = await this.hooks.runPreToolUse({
+            input: parsedInput,
+            iteration: round + 1,
+            permissionMode,
+            risk,
             runId: input.runId,
-            signal: input.signal,
             sessionId: input.sessionId,
-            sessions: this.sessions,
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
             userId: input.userId,
           });
+          let effectiveToolCall = toolCall;
+          if (preToolResult.rewrite !== undefined && preToolResult.rewrite !== parsedInput) {
+            effectiveToolCall = {
+              ...toolCall,
+              arguments: JSON.stringify(preToolResult.rewrite),
+            };
+            parsedInput = preToolResult.rewrite;
+          }
+
+          let result: string;
+          let durationMs = 0;
+
+          if (preToolResult.deny) {
+            result = toolError(`工具调用被策略拦截：${preToolResult.deny.reason}`);
+          } else if (toolNeedsApproval(tool, permissionMode)) {
+            await this.sessions.updateRunStatus(input.runId, "waiting_approval");
+            const approvalId = `approval_${randomUUID()}`;
+            const reason =
+              permissionMode === "read-only" ?
+                "当前权限模式为 read-only，写类工具需要用户确认。"
+              : "当前工具会产生写入或长期副作用，需要用户确认。";
+            yield {
+              type: "tool.approval.required",
+              approvalId,
+              reason,
+              risk,
+              runId: input.runId,
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+            };
+            yield {
+              type: "tool.confirmation.required",
+              confirmationId: approvalId,
+              message: reason,
+              runId: input.runId,
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+            };
+            await this.sessions.updateRunStatus(input.runId, "executing_tools");
+            result = toolError(reason, { approvalId, requiresApproval: true });
+          } else {
+            const startedAt = Date.now();
+            result = await tools.execute(effectiveToolCall, {
+              permissionMode,
+              runId: input.runId,
+              signal: input.signal,
+              sessionId: input.sessionId,
+              sessions: this.sessions,
+              userId: input.userId,
+            });
+            durationMs = Date.now() - startedAt;
+          }
           const failure = failedToolMessage(result);
 
           workingMessages.push({
             role: "tool",
             content: result,
-            toolCallId: toolCall.id,
+            toolCallId: effectiveToolCall.id,
           });
           await this.sessions.appendMessage({
             content: result,
             role: "tool",
             sessionId: input.sessionId,
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
+            toolCallId: effectiveToolCall.id,
+            toolName: effectiveToolCall.name,
+          });
+          await this.hooks.runPostToolUse({
+            durationMs,
+            input: parsedInput,
+            iteration: round + 1,
+            ok: !failure,
+            output: result,
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: effectiveToolCall.id,
+            toolName: effectiveToolCall.name,
+            userId: input.userId,
           });
 
           if (failure) {
             yield {
               type: "tool.failed",
+              durationMs,
               runId: input.runId,
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
               error: failure,
             };
           } else {
             yield {
               type: "tool.completed",
+              durationMs,
+              resultPreview: previewToolResult(result),
               runId: input.runId,
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
             };
           }
         }
@@ -352,6 +677,17 @@ export class AgentLoop {
 
       await this.sessions.updateRunStatus(input.runId, "finalizing");
       let finalizerText = "";
+      const sanitizedFinalizerPayload = sanitizeModelMessages(workingMessages);
+      if (sanitizedFinalizerPayload.changed) {
+        workingMessages = sanitizedFinalizerPayload.messages;
+        yield {
+          type: "payload.sanitized",
+          insertedMissingToolResults: sanitizedFinalizerPayload.stats.insertedMissingToolResults,
+          invalidToolArguments: sanitizedFinalizerPayload.stats.invalidToolArguments,
+          removedOrphanToolResults: sanitizedFinalizerPayload.stats.removedOrphanToolResults,
+          runId: input.runId,
+        };
+      }
       for await (const event of this.modelRouter.stream({
         context: {
           ...context,
@@ -419,6 +755,33 @@ export class AgentLoop {
         };
       }
 
+      const finalizerPostModelResponse = await this.hooks.runPostModelResponse({
+        content: visibleAssistantText,
+        iteration: MAX_TOOL_ROUNDS + 1,
+        runId: input.runId,
+        sessionId: input.sessionId,
+        toolCalls: [],
+        userId: input.userId,
+      });
+      if (finalizerPostModelResponse.deny) {
+        const replacement =
+          finalizerPostModelResponse.deny.userMessage ??
+          "模型输出未通过运行时检查，请换个问法再试。";
+        if (visibleAssistantText) {
+          yield {
+            type: "assistant.delta.retracted",
+            messageId: assistantMessageId,
+            text: visibleAssistantText,
+          };
+        }
+        visibleAssistantText = replacement;
+        yield {
+          type: "assistant.delta",
+          messageId: assistantMessageId,
+          text: replacement,
+        };
+      }
+
       const finalMessage = await this.sessions.appendMessage({
         content: visibleAssistantText,
         role: "assistant",
@@ -436,6 +799,13 @@ export class AgentLoop {
         .catch((error) => {
           console.error("Background memory review failed", error);
         });
+      await this.hooks.runMessageEnd({
+        runId: input.runId,
+        sessionId: input.sessionId,
+        success: true,
+        totalIterations: MAX_TOOL_ROUNDS + 1,
+        userId: input.userId,
+      });
       yield {
         type: "run.completed",
         finalMessageId: finalMessage.id,
@@ -448,8 +818,85 @@ export class AgentLoop {
         return;
       }
 
+      if (isContextOverflowError(error) && !input.reactiveCompactionAttempted) {
+        await this.sessions.updateRunStatus(input.runId, "compacting");
+        const latestHistory = await this.sessions.listMessages(input.sessionId, {
+          limit: 180,
+          userId: input.userId,
+        });
+        const beforeTokenEstimate = estimateAgentMessages(latestHistory);
+        yield {
+          type: "context.compaction.started",
+          beforeTokenEstimate,
+          reason: "reactive",
+        };
+        await this.hooks.runPreCompact({
+          reason: "reactive",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          userId: input.userId,
+        });
+
+        try {
+          const compression = await this.contextCompressor.maybeCompress({
+            force: true,
+            messages: latestHistory,
+            model: input.model,
+            runId: input.runId,
+            sessionId: input.sessionId,
+            signal: input.signal,
+            userId: input.userId,
+          });
+
+          if (compression.compacted && compression.summaryMessageId) {
+            yield {
+              type: "context.compacted",
+              afterTokenEstimate: compression.afterTokenEstimate,
+              beforeTokenEstimate: compression.beforeTokenEstimate,
+              compactedMessageCount: compression.compactedMessageCount,
+              reason: "reactive",
+              summaryMessageId: compression.summaryMessageId,
+            };
+            await this.hooks.runPostCompact({
+              messagesCompacted: compression.compactedMessageCount,
+              messagesRetained: compression.messages.length - compression.compactedMessageCount,
+              reason: "reactive",
+              runId: input.runId,
+              sessionId: input.sessionId,
+              userId: input.userId,
+            });
+            yield {
+              type: "protocol.recovery",
+              reason: "context_too_long",
+              retryAttempt: 1,
+              runId: input.runId,
+            };
+
+            for await (const retryEvent of this.execute({
+              ...input,
+              reactiveCompactionAttempted: true,
+            })) {
+              if (retryEvent.type !== "run.started") {
+                yield retryEvent;
+              }
+            }
+            return;
+          }
+        } catch (compressionError) {
+          console.warn("Reactive context compression failed", compressionError);
+        }
+      }
+
       const message = error instanceof Error ? error.message : "Unknown agent error";
       await this.sessions.updateRunStatus(input.runId, "failed", { message });
+      await this.hooks.runMessageEnd({
+        error,
+        runId: input.runId,
+        sessionId: input.sessionId,
+        success: false,
+        totalIterations: 0,
+        userId: input.userId,
+      });
       yield { type: "run.failed", runId: input.runId, error: message };
     }
   }

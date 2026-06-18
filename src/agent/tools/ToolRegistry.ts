@@ -9,6 +9,7 @@ import {
   toolError,
 } from "@/agent/tools/types";
 import type { ModelToolCall, ModelToolDefinition } from "@/agent/runtime/types";
+import type { ToolUiManifest } from "@/shared/agent-protocol";
 
 function defaultTools(): AgentTool[] {
   return [memoryTool, sessionSearchTool, ...createWebTools()];
@@ -35,6 +36,24 @@ export class ToolRegistry {
 
   get names(): string[] {
     return [...this.tools.keys()];
+  }
+
+  get manifest(): ToolUiManifest[] {
+    return [...this.tools.values()].map((tool) => {
+      const isReadOnly = tool.isReadOnly === true;
+      return {
+        description: tool.definition.function.description,
+        displayName: tool.name,
+        isReadOnly,
+        name: tool.name,
+        requiresApproval: tool.requiresApproval === true || !isReadOnly,
+        risk: tool.risk ?? (isReadOnly ? "read" : "write"),
+      };
+    });
+  }
+
+  get(name: string): AgentTool | undefined {
+    return this.tools.get(name);
   }
 
   async execute(toolCall: ModelToolCall, context: ToolExecutionContext): Promise<string> {
