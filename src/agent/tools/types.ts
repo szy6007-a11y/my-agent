@@ -5,15 +5,21 @@ import type {
   ToolRisk,
 } from "@/agent/runtime/types";
 import type { SessionRepository } from "@/agent/sessions/SessionRepository";
+import type { FileReadState } from "@/agent/tools/FileReadState";
 
 export type ToolExecutionContext = {
   permissionMode?: PermissionMode;
+  readFileState?: FileReadState;
   runId: string;
   signal?: AbortSignal;
   sessionId: string;
   sessions: SessionRepository;
   userId: string;
 };
+
+export type ToolValidationResult =
+  | { ok: true }
+  | { extra?: Record<string, unknown>; message: string; ok: false };
 
 export type AgentTool = {
   buildApproval?: (
@@ -29,6 +35,11 @@ export type AgentTool = {
   name: string;
   requiresApproval?: boolean;
   risk?: ToolRisk;
+  validateInput?: (
+    args: unknown,
+    context: ToolExecutionContext,
+    toolCall: ModelToolCall,
+  ) => Promise<ToolValidationResult> | ToolValidationResult;
 };
 
 export function parseToolArguments(raw: string): unknown {

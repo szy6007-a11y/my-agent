@@ -6,6 +6,7 @@ import type { ModelStreamInput } from "@/agent/models/ProviderAdapter";
 import type { ModelRouter } from "@/agent/models/ModelRouter";
 import type { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
 import type {
+  AgentArtifact,
   AgentEvent,
   AgentMessage,
   ModelMessage,
@@ -97,6 +98,7 @@ class FakeSessionRepository {
   }
 
   async appendMessage(input: {
+    artifacts?: AgentArtifact[];
     content: string;
     role: AgentMessage["role"];
     toolCallId?: string;
@@ -105,6 +107,7 @@ class FakeSessionRepository {
   }): Promise<{ id: string }> {
     const message: AgentMessage = {
       id: `msg_${this.messages.length + 1}`,
+      artifacts: input.artifacts,
       content: input.content,
       createdAt: new Date(this.messages.length * 1000).toISOString(),
       role: input.role,
@@ -209,6 +212,29 @@ class FakeWriteToolCallModelRouter {
   }
 }
 
+class FakeArtifactToolCallModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: JSON.stringify({ path: "index.html" }),
+            id: "call_artifact",
+            name: "fake_artifact",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "HTML 文件已生成。" };
+  }
+}
+
 const fakeWriteTool: AgentTool = {
   name: "fake_write",
   definition: {
@@ -229,6 +255,39 @@ const fakeWriteTool: AgentTool = {
   risk: "write",
   async execute(args) {
     return JSON.stringify({ success: true, args });
+  },
+};
+
+const fakeArtifactTool: AgentTool = {
+  name: "fake_artifact",
+  definition: {
+    type: "function",
+    function: {
+      name: "fake_artifact",
+      description: "Test-only artifact tool.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  isReadOnly: false,
+  risk: "write",
+  async execute() {
+    return JSON.stringify({
+      success: true,
+      artifact: {
+        contentType: "text/html; charset=utf-8",
+        downloadUrl: "/api/agent/artifacts/artifact_test/download",
+        filename: "index.html",
+        id: "artifact_test",
+        path: "index.html",
+        sizeBytes: 128,
+      },
+    });
   },
 };
 
@@ -469,6 +528,73 @@ test("AgentLoop waits for approval and executes write tools after confirmation",
     /"success":true/,
   );
   assert.equal(sessions.messages.at(-1)?.content, "写入完成。");
+});
+
+test("AgentLoop emits artifact events and stores artifacts on the final assistant message", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+    import("@/agent/tools/ToolRegistry"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "生成一个可下载的 HTML 文件",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new FakeArtifactToolCallModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([fakeArtifactTool]),
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      permissionMode: "bypass",
+      runId: "run_artifact",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+  const artifactEvent = events.find((event) => event.type === "artifact.created");
+
+  assert.deepEqual(artifactEvent, {
+    artifact: {
+      contentType: "text/html; charset=utf-8",
+      downloadUrl: "/api/agent/artifacts/artifact_test/download",
+      filename: "index.html",
+      id: "artifact_test",
+      path: "index.html",
+      sizeBytes: 128,
+    },
+    runId: "run_artifact",
+    toolCallId: "call_artifact",
+    toolName: "fake_artifact",
+    type: "artifact.created",
+  });
+  assert.deepEqual(sessions.messages.at(-1)?.artifacts, [
+    {
+      contentType: "text/html; charset=utf-8",
+      downloadUrl: "/api/agent/artifacts/artifact_test/download",
+      filename: "index.html",
+      id: "artifact_test",
+      path: "index.html",
+      sizeBytes: 128,
+    },
+  ]);
+  assert.equal(sessions.messages.at(-1)?.content, "HTML 文件已生成。");
 });
 
 test("AgentLoop records rejected approvals as tool failures without executing", async () => {

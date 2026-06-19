@@ -1,4 +1,5 @@
 export type {
+  AgentArtifact,
   AgentEvent,
   AgentMessage,
   AgentMessageContentKind,

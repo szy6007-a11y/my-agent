@@ -17,6 +17,7 @@ export type AgentMessage = {
   id: string;
   role: AgentRole;
   content: string;
+  artifacts?: AgentArtifact[];
   contentKind?: AgentMessageContentKind;
   contextSummary?: ContextSummaryMetadata;
   toolCallId?: string | null;
@@ -58,6 +59,15 @@ export type ToolUiManifest = {
   name: string;
   requiresApproval: boolean;
   risk: ToolRisk;
+};
+
+export type AgentArtifact = {
+  contentType: string;
+  downloadUrl: string;
+  filename: string;
+  id: string;
+  path: string;
+  sizeBytes: number;
 };
 
 export type AgentEvent =
@@ -141,6 +151,13 @@ export type AgentEvent =
       type: "tool.failed";
       durationMs?: number;
       error: string;
+      runId: string;
+      toolCallId: string;
+      toolName: string;
+    }
+  | {
+      type: "artifact.created";
+      artifact: AgentArtifact;
       runId: string;
       toolCallId: string;
       toolName: string;

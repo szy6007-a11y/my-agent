@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "timers/promises";
 import postgres from "postgres";
 
 import type {
+  AgentArtifact,
   ContextSummaryMetadata,
   AgentEvent,
   AgentMessage,
@@ -25,6 +26,7 @@ type StoredMessageRow = {
   id: string;
   role: AgentRole;
   content_json: {
+    artifacts?: AgentArtifact[];
     kind?: AgentMessageContentKind;
     summary?: ContextSummaryMetadata;
     text?: string;
@@ -301,6 +303,10 @@ function toAgentMessage(row: StoredMessageRow): AgentMessage {
     id: row.id,
     role: row.role,
     content: contentText(row),
+    artifacts:
+      Array.isArray(row.content_json.artifacts) && row.content_json.artifacts.length > 0 ?
+        row.content_json.artifacts
+      : undefined,
     contentKind: row.content_json.kind,
     contextSummary: row.content_json.summary,
     toolCallId: row.tool_call_id,
@@ -512,6 +518,7 @@ export class SessionRepository {
     sessionId: string;
     role: AgentMessage["role"];
     content: string;
+    artifacts?: AgentArtifact[];
     contentKind?: AgentMessageContentKind;
     contextSummary?: ContextSummaryMetadata;
     toolCallId?: string | null;
@@ -522,6 +529,7 @@ export class SessionRepository {
     const db = getSql();
     const id = `msg_${randomUUID()}`;
     const contentJson = {
+      ...(input.artifacts && input.artifacts.length > 0 ? { artifacts: input.artifacts } : {}),
       ...(input.contentKind ? { kind: input.contentKind } : {}),
       ...(input.contextSummary ? { summary: input.contextSummary } : {}),
       text: input.content,

@@ -6,6 +6,8 @@ import {
   ChevronDown,
   CircleStop,
   Copy,
+  Download,
+  FileText,
   LogOut,
   Library,
   Mic,
@@ -26,13 +28,14 @@ import type {
   ServiceHealthState,
   ServiceHealthStatus,
 } from "@/lib/service-health";
-import type { AgentEvent } from "@/shared/agent-protocol";
+import type { AgentArtifact, AgentEvent } from "@/shared/agent-protocol";
 import { stripTrustedRuntimeReminder } from "@/shared/runtime-reminder";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  artifacts?: AgentArtifact[];
   reasoningContent?: string;
   status?: "streaming" | "complete" | "failed" | "aborted";
 };
@@ -198,12 +201,37 @@ function approvalDetailLines(request: unknown): string[] {
     return [];
   }
   const record = details as Record<string, unknown>;
+  const operation =
+    record.operation === "create" ? "创建"
+    : record.operation === "update" ? "覆盖"
+    : record.operation === "write" ? "写入"
+    : record.operation;
   return [
+    record.path ? `文件：${String(record.path)}` : "",
+    operation ? `操作：${String(operation)}` : "",
+    typeof record.sizeBytes === "number" ? `大小：${formatBytes(record.sizeBytes)}` : "",
     record.sourceUrl ? `来源：${String(record.sourceUrl)}` : "",
     record.commitSha ? `Commit：${String(record.commitSha).slice(0, 12)}` : "",
     record.proposalId ? `提案：${String(record.proposalId).replace(/^skill_/, "").slice(0, 8)}` : "",
     record.trustLevel ? `信任级别：${String(record.trustLevel)}` : "",
   ].filter(Boolean);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "未知大小";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB"] as const;
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function appendMessageContent(
@@ -248,6 +276,23 @@ function appendMessageReasoning(
   );
 }
 
+function appendMessageArtifact(
+  messages: ChatMessage[],
+  messageId: string,
+  artifact: AgentArtifact,
+) {
+  return messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+    const artifacts = message.artifacts ?? [];
+    if (artifacts.some((item) => item.id === artifact.id)) {
+      return message;
+    }
+    return { ...message, artifacts: [...artifacts, artifact] };
+  });
+}
+
 function updateMessage(
   messages: ChatMessage[],
   messageId: string,
@@ -255,6 +300,42 @@ function updateMessage(
 ) {
   return messages.map((message) =>
     message.id === messageId ? { ...message, ...updates } : message,
+  );
+}
+
+function ArtifactList({ artifacts }: { artifacts?: AgentArtifact[] }) {
+  if (!artifacts?.length) {
+    return null;
+  }
+
+  return (
+    <div className="artifact-list" aria-label="生成的文件">
+      {artifacts.map((artifact) => {
+        const detail =
+          artifact.path === artifact.filename ?
+            formatBytes(artifact.sizeBytes)
+          : `${artifact.path} · ${formatBytes(artifact.sizeBytes)}`;
+        return (
+          <a
+            className="artifact-card"
+            download={artifact.filename}
+            href={artifact.downloadUrl}
+            key={artifact.id}
+          >
+            <span className="artifact-icon" aria-hidden="true">
+              <FileText size={18} />
+            </span>
+            <span className="artifact-copy">
+              <strong>{artifact.filename}</strong>
+              <span>{detail}</span>
+            </span>
+            <span className="artifact-download" aria-hidden="true">
+              <Download size={17} />
+            </span>
+          </a>
+        );
+      })}
+    </div>
   );
 }
 
@@ -751,6 +832,7 @@ export function ChatWorkspace() {
 
       const body = (await response.json()) as {
         messages: Array<{
+          artifacts?: AgentArtifact[];
           content: string;
           id: string;
           role: "user" | "assistant";
@@ -768,6 +850,7 @@ export function ChatWorkspace() {
             message.role === "user" ?
               stripTrustedRuntimeReminder(message.content)
             : message.content,
+          artifacts: message.artifacts,
           id: message.id,
           role: message.role,
           status: "complete",
@@ -823,7 +906,7 @@ export function ChatWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          maxTokens: 1024,
+          maxTokens: 4096,
           message: prompt,
           ...(sessionId ? { sessionId } : {}),
         }),
@@ -1042,6 +1125,18 @@ export function ChatWorkspace() {
             });
           }
 
+          if (event.type === "artifact.created") {
+            setMessages((current) =>
+              appendMessageArtifact(current, assistantMessage.id, event.artifact),
+            );
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "artifact",
+              message: `文件已生成 ${event.artifact.filename}`,
+            });
+          }
+
           if (event.type === "tool.failed") {
             setPendingApprovals((current) =>
               current.filter((approval) => approval.toolCallId !== event.toolCallId),
@@ -1077,6 +1172,8 @@ export function ChatWorkspace() {
                   content:
                     assistant?.content.trim() ?
                       assistant.content
+                    : assistant?.artifacts?.length ?
+                      "文件已生成，可以直接下载。"
                     : "没有收到模型回复，请再试一次。",
                   status: "complete",
                 },
@@ -1533,6 +1630,9 @@ export function ChatWorkspace() {
                         />
                       : message.content || " "}
                     </div>}
+                  {message.role === "assistant" && (
+                    <ArtifactList artifacts={message.artifacts} />
+                  )}
                   {message.role === "assistant" &&
                     message.status !== "streaming" &&
                     message.content.trim() && (

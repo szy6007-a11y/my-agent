@@ -1,3 +1,4 @@
+import { createFileTools } from "@/agent/tools/FileTools";
 import { memoryTool } from "@/agent/tools/MemoryTool";
 import { sessionSearchTool } from "@/agent/tools/SessionSearchTool";
 import { createSkillTools } from "@/agent/tools/SkillTools";
@@ -13,7 +14,13 @@ import type { ModelToolCall, ModelToolDefinition } from "@/agent/runtime/types";
 import type { ToolUiManifest } from "@/shared/agent-protocol";
 
 function defaultTools(): AgentTool[] {
-  return [memoryTool, sessionSearchTool, ...createWebTools(), ...createSkillTools()];
+  return [
+    memoryTool,
+    sessionSearchTool,
+    ...createWebTools(),
+    ...createFileTools(),
+    ...createSkillTools(),
+  ];
 }
 
 function toolEnabled(tool: AgentTool): boolean {
@@ -57,18 +64,75 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
-  async execute(toolCall: ModelToolCall, context: ToolExecutionContext): Promise<string> {
+  async prepare(
+    toolCall: ModelToolCall,
+    context: ToolExecutionContext,
+  ): Promise<
+    | {
+        args: unknown;
+        ok: true;
+        tool: AgentTool;
+        toolCall: ModelToolCall;
+      }
+    | {
+        args?: unknown;
+        message: string;
+        ok: false;
+        result: string;
+        tool?: AgentTool;
+        toolCall: ModelToolCall;
+      }
+  > {
     const tool = this.tools.get(toolCall.name);
     if (!tool) {
-      return toolError(`Unknown tool '${toolCall.name}'.`);
+      const message = `Unknown tool '${toolCall.name}'.`;
+      return { message, ok: false, result: toolError(message), toolCall };
     }
 
     try {
       const args = parseToolArguments(toolCall.arguments);
-      return truncateToolResult(await tool.execute(args, context, toolCall), tool.maxResultSizeChars);
+      const validation = await tool.validateInput?.(args, context, toolCall);
+      if (validation && !validation.ok) {
+        return {
+          args,
+          message: validation.message,
+          ok: false,
+          result: toolError(validation.message, validation.extra),
+          tool,
+          toolCall,
+        };
+      }
+      return { args, ok: true, tool, toolCall };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Tool execution failed";
+      return { message, ok: false, result: toolError(message), tool, toolCall };
+    }
+  }
+
+  async executePrepared(
+    prepared: {
+      args: unknown;
+      tool: AgentTool;
+      toolCall: ModelToolCall;
+    },
+    context: ToolExecutionContext,
+  ): Promise<string> {
+    try {
+      return truncateToolResult(
+        await prepared.tool.execute(prepared.args, context, prepared.toolCall),
+        prepared.tool.maxResultSizeChars,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Tool execution failed";
       return toolError(message);
     }
+  }
+
+  async execute(toolCall: ModelToolCall, context: ToolExecutionContext): Promise<string> {
+    const prepared = await this.prepare(toolCall, context);
+    if (!prepared.ok) {
+      return prepared.result;
+    }
+    return this.executePrepared(prepared, context);
   }
 }
