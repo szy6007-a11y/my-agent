@@ -59,6 +59,16 @@ export function workspaceRoot(userId: string, sessionId: string): string {
   );
 }
 
+export function workspaceStateRoot(userId: string, sessionId: string): string {
+  return join(
+    storageRoot(serverEnv.FILE_WORKSPACE_DIR, FALLBACK_WORKSPACE_DIR),
+    serverEnv.APP_ENV,
+    safeSegment(userId),
+    ".state",
+    safeSegment(sessionId),
+  );
+}
+
 export function artifactRoot(): string {
   return join(storageRoot(serverEnv.ARTIFACT_STORAGE_DIR, FALLBACK_ARTIFACT_DIR), serverEnv.APP_ENV);
 }

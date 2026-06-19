@@ -106,7 +106,7 @@ function normalizeDeepSeekStreamError(input: {
         `，当时模型已经开始生成工具调用参数（已接收约 ${partialChars} 个字符）`
       : "";
     return new Error(
-      `DeepSeek 流式响应在完成前中断${toolContext}。这通常是上游连接断开；如果正在生成 HTML/PPT 等文件，常见原因是单次工具参数过长。请重试，或减少页数/内容后再生成。`,
+      `DeepSeek 流式响应在完成前中断${toolContext}。这通常是上游连接断开；如果正在生成 HTML/PPT 等文件，常见原因是单次工具参数过长。请改用 write_file_chunk 分段写入，或减少页数/内容后再生成。`,
     );
   }
 

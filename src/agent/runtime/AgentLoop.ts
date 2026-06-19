@@ -36,6 +36,7 @@ import {
   parseToolArguments,
   toolError,
   type AgentTool,
+  type ToolExecutionContext,
 } from "@/agent/tools/types";
 
 const MAX_TOOL_ROUNDS = 6;
@@ -165,7 +166,13 @@ function toolRisk(tool: AgentTool | undefined): ToolRisk {
   return tool?.risk ?? (tool?.isReadOnly ? "read" : "write");
 }
 
-function toolNeedsApproval(tool: AgentTool | undefined, permissionMode: PermissionMode): boolean {
+async function toolNeedsApproval(
+  tool: AgentTool | undefined,
+  permissionMode: PermissionMode,
+  args: unknown,
+  context: ToolExecutionContext,
+  toolCall: ModelToolCall,
+): Promise<boolean> {
   if (!tool) {
     return false;
   }
@@ -174,16 +181,27 @@ function toolNeedsApproval(tool: AgentTool | undefined, permissionMode: Permissi
     return false;
   }
 
-  if (tool.requiresApproval === true) {
-    return true;
-  }
-
   if (tool.isReadOnly === true) {
     return false;
   }
 
+  if (permissionMode === "read-only") {
+    return true;
+  }
+
+  if (typeof tool.requiresApproval === "function") {
+    try {
+      return await tool.requiresApproval(args, context, toolCall);
+    } catch {
+      return true;
+    }
+  }
+
+  if (tool.requiresApproval === true) {
+    return true;
+  }
+
   return (
-    permissionMode === "read-only" ||
     permissionMode === "ask-on-write" ||
     permissionMode === "plan" ||
     permissionMode === "auto-safe"
@@ -689,7 +707,15 @@ export class AgentLoop {
             } else {
               parsedInput = prepared.args;
               const preparedRisk = toolRisk(prepared.tool);
-              if (toolNeedsApproval(prepared.tool, permissionMode)) {
+              if (
+                await toolNeedsApproval(
+                  prepared.tool,
+                  permissionMode,
+                  prepared.args,
+                  toolContext,
+                  prepared.toolCall,
+                )
+              ) {
                 await this.sessions.updateRunStatus(input.runId, "waiting_approval");
                 const defaultReason =
                   permissionMode === "read-only" ?

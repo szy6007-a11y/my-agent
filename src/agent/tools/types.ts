@@ -33,7 +33,13 @@ export type AgentTool = {
   isReadOnly?: boolean;
   maxResultSizeChars?: number;
   name: string;
-  requiresApproval?: boolean;
+  requiresApproval?:
+    | boolean
+    | ((
+        args: unknown,
+        context: ToolExecutionContext,
+        toolCall: ModelToolCall,
+      ) => Promise<boolean> | boolean);
   risk?: ToolRisk;
   validateInput?: (
     args: unknown,

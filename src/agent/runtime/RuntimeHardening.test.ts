@@ -235,6 +235,48 @@ class FakeArtifactToolCallModelRouter {
   }
 }
 
+class ChunkedWriteModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: JSON.stringify({ content: "part-1", path: "deck.html", sequence: 1 }),
+            id: "call_chunk_1",
+            name: "fake_dynamic_chunk_write",
+          },
+        ],
+      };
+      return;
+    }
+
+    if (this.payloads.length === 2) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: JSON.stringify({
+              content: "part-2",
+              final: true,
+              path: "deck.html",
+              sequence: 2,
+            }),
+            id: "call_chunk_2",
+            name: "fake_dynamic_chunk_write",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "分段写入完成。" };
+  }
+}
+
 const fakeWriteTool: AgentTool = {
   name: "fake_write",
   definition: {
@@ -255,6 +297,40 @@ const fakeWriteTool: AgentTool = {
   risk: "write",
   async execute(args) {
     return JSON.stringify({ success: true, args });
+  },
+};
+
+const fakeDynamicChunkWriteTool: AgentTool = {
+  name: "fake_dynamic_chunk_write",
+  definition: {
+    type: "function",
+    function: {
+      name: "fake_dynamic_chunk_write",
+      description: "Test-only dynamically approved chunk writer.",
+      parameters: {
+        type: "object",
+        properties: {
+          content: { type: "string" },
+          final: { type: "boolean" },
+          path: { type: "string" },
+          sequence: { type: "number" },
+        },
+        required: ["path", "content", "sequence"],
+      },
+    },
+  },
+  isReadOnly: false,
+  risk: "write",
+  requiresApproval(args) {
+    return (args as { sequence?: unknown }).sequence === 1;
+  },
+  async execute(args) {
+    const input = args as { final?: boolean; sequence?: number };
+    return JSON.stringify({
+      success: true,
+      final: input.final === true,
+      sequence: input.sequence,
+    });
   },
 };
 
@@ -528,6 +604,56 @@ test("AgentLoop waits for approval and executes write tools after confirmation",
     /"success":true/,
   );
   assert.equal(sessions.messages.at(-1)?.content, "写入完成。");
+});
+
+test("AgentLoop can approve the first chunk and continue ordered chunk appends without repeated approval", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+    import("@/agent/tools/ToolRegistry"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "用 PPT skill 生成一个 HTML PPT，然后让我下载",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new ChunkedWriteModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([fakeDynamicChunkWriteTool]),
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      permissionMode: "ask-on-write",
+      runId: "run_chunk_approval",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  const approvals = events.filter((event) => event.type === "tool.approval.required");
+  const completedTools = events.filter((event) => event.type === "tool.completed");
+
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0]?.toolCallId, "call_chunk_1");
+  assert.equal(sessions.approvals.length, 1);
+  assert.equal(completedTools.length, 2);
+  assert.equal(events.some((event) => event.type === "tool.failed"), false);
+  assert.equal(sessions.messages.at(-1)?.content, "分段写入完成。");
 });
 
 test("AgentLoop emits artifact events and stores artifacts on the final assistant message", async () => {

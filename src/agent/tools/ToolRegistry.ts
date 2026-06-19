@@ -54,7 +54,8 @@ export class ToolRegistry {
         displayName: tool.name,
         isReadOnly,
         name: tool.name,
-        requiresApproval: tool.requiresApproval === true || !isReadOnly,
+        requiresApproval:
+          tool.requiresApproval === true || typeof tool.requiresApproval === "function" || !isReadOnly,
         risk: tool.risk ?? (isReadOnly ? "read" : "write"),
       };
     });
