@@ -972,14 +972,132 @@ body > button[aria-label="Open Next.js Dev Tools"],
   outline-offset: 2px;
 }
 
-.composer {
+.composer-stack {
   position: sticky;
   bottom: 24px;
-  display: flex;
+  z-index: 30;
+  display: grid;
   width: min(710px, calc(100% - 32px));
+  gap: 8px;
+  justify-self: center;
+}
+
+.run-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.08);
+  padding: 8px;
+}
+
+.run-status-row,
+.approval-row,
+.approval-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.run-status-row {
+  gap: 9px;
+  min-height: 32px;
+}
+
+.run-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: #8b8b8b;
+}
+
+.run-status-dot.running {
+  background: #2563eb;
+}
+
+.run-status-dot.waiting_approval {
+  background: #d97706;
+}
+
+.run-status-dot.cancelling {
+  background: #dc2626;
+}
+
+.run-status-copy,
+.approval-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.run-status-copy strong,
+.run-status-copy span,
+.approval-copy strong,
+.approval-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status-copy strong,
+.approval-copy strong {
+  color: #252525;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.run-status-copy span,
+.approval-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.approval-row {
+  gap: 10px;
+  min-height: 36px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.approval-actions {
+  flex: 0 0 auto;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.approval-action {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 7px;
+  background: #f4f4f4;
+  color: #252525;
+}
+
+.approval-action:hover:not(:disabled) {
+  background: #e9e9e9;
+}
+
+.approval-action.approve {
+  color: #11723f;
+}
+
+.approval-action.reject {
+  color: #b42318;
+}
+
+.approval-action:disabled {
+  opacity: 0.55;
+}
+
+.composer {
+  display: flex;
+  width: 100%;
   align-items: center;
   gap: 6px;
-  justify-self: center;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: #ffffff;
@@ -1056,7 +1174,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
     max-width: calc(100% - 38px);
   }
 
-  .composer {
+  .composer-stack {
     bottom: 14px;
     width: calc(100% - 20px);
   }

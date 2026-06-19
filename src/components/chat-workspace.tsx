@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Send,
+  X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { code as streamdownCode } from "@streamdown/code";
@@ -53,6 +54,25 @@ type ChatSession = {
 };
 
 type MonitorConnection = "connecting" | "connected" | "disconnected";
+
+type ActiveRunStatus = "accepted" | "running" | "waiting_approval" | "cancelling";
+
+type ActiveRunState = {
+  queueMode?: Extract<AgentEvent, { type: "run.accepted" }>["queueMode"];
+  runId: string;
+  sessionId: string;
+  status: ActiveRunStatus;
+};
+
+type PendingApproval = {
+  approvalId: string;
+  reason: string;
+  risk: Extract<AgentEvent, { type: "tool.approval.required" }>["risk"];
+  runId: string;
+  state: "pending" | "submitting";
+  toolCallId: string;
+  toolName: string;
+};
 
 type ServiceConsoleLog = {
   id: string;
@@ -152,6 +172,13 @@ function serviceStateLabel(state: ServiceHealthState) {
   if (state === "ok") return "正常";
   if (state === "disabled") return "未启用";
   return "告警";
+}
+
+function runStatusLabel(status: ActiveRunStatus) {
+  if (status === "accepted") return "排队中";
+  if (status === "waiting_approval") return "等待确认";
+  if (status === "cancelling") return "停止中";
+  return "运行中";
 }
 
 function logLevelLabel(level: ServiceConsoleLog["level"]) {
@@ -272,6 +299,8 @@ export function ChatWorkspace() {
   const [serviceSnapshot, setServiceSnapshot] =
     useState<ServiceHealthSnapshot | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<ServiceConsoleLog[]>([]);
+  const [activeRun, setActiveRun] = useState<ActiveRunState | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
@@ -394,6 +423,8 @@ export function ChatWorkspace() {
     setSessionId(null);
     setSessions([]);
     setConsoleLogs([]);
+    setActiveRun(null);
+    setPendingApprovals([]);
     setMonitorConnection("connecting");
     setServiceSnapshot(null);
     autoScrollRef.current = true;
@@ -758,6 +789,8 @@ export function ChatWorkspace() {
     isAtBottomRef.current = true;
     userDetachedFromBottomRef.current = false;
     setMessages((current) => [...current, userMessage, assistantMessage]);
+    setActiveRun(null);
+    setPendingApprovals([]);
     setIsStreaming(true);
 
     const abortController = new AbortController();
@@ -807,6 +840,12 @@ export function ChatWorkspace() {
 
           if (event.type === "run.accepted") {
             setSessionId(event.sessionId);
+            setActiveRun({
+              queueMode: event.queueMode,
+              runId: event.runId,
+              sessionId: event.sessionId,
+              status: "accepted",
+            });
             void refreshSessions();
             appendConsoleLog({
               at: new Date().toISOString(),
@@ -817,6 +856,11 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.started") {
+            setActiveRun((current) =>
+              current?.runId === event.runId ?
+                { ...current, status: "running" }
+              : current,
+            );
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
@@ -913,6 +957,30 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "tool.approval.required") {
+            setActiveRun((current) =>
+              current?.runId === event.runId ?
+                { ...current, status: "waiting_approval" }
+              : current,
+            );
+            setPendingApprovals((current) => {
+              const nextApproval: PendingApproval = {
+                approvalId: event.approvalId,
+                reason: event.reason,
+                risk: event.risk,
+                runId: event.runId,
+                state: "pending",
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+              };
+
+              if (current.some((approval) => approval.approvalId === event.approvalId)) {
+                return current.map((approval) =>
+                  approval.approvalId === event.approvalId ? nextApproval : approval,
+                );
+              }
+
+              return [...current, nextApproval];
+            });
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "warn",
@@ -930,7 +998,19 @@ export function ChatWorkspace() {
             });
           }
 
+          if (event.type === "tool.approval.resolved") {
+            setPendingApprovals((current) =>
+              current.filter((approval) => approval.approvalId !== event.approvalId),
+            );
+            setActiveRun((current) =>
+              current?.runId === event.runId ? { ...current, status: "running" } : current,
+            );
+          }
+
           if (event.type === "tool.completed") {
+            setPendingApprovals((current) =>
+              current.filter((approval) => approval.toolCallId !== event.toolCallId),
+            );
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
@@ -940,6 +1020,9 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "tool.failed") {
+            setPendingApprovals((current) =>
+              current.filter((approval) => approval.toolCallId !== event.toolCallId),
+            );
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "warn",
@@ -949,6 +1032,10 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.completed") {
+            setActiveRun((current) => (current?.runId === event.runId ? null : current));
+            setPendingApprovals((current) =>
+              current.filter((approval) => approval.runId !== event.runId),
+            );
             void refreshSessions();
             appendConsoleLog({
               at: new Date().toISOString(),
@@ -975,6 +1062,10 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.failed") {
+            setActiveRun((current) => (current?.runId === event.runId ? null : current));
+            setPendingApprovals((current) =>
+              current.filter((approval) => approval.runId !== event.runId),
+            );
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "error",
@@ -994,6 +1085,10 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "run.aborted") {
+            setActiveRun((current) => (current?.runId === event.runId ? null : current));
+            setPendingApprovals((current) =>
+              current.filter((approval) => approval.runId !== event.runId),
+            );
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "warn",
@@ -1052,8 +1147,110 @@ export function ChatWorkspace() {
     }, 1600);
   }
 
-  function stopStreaming() {
+  async function resolveApproval(
+    approval: PendingApproval,
+    decision: "approved" | "rejected",
+  ) {
+    setPendingApprovals((current) =>
+      current.map((item) =>
+        item.approvalId === approval.approvalId ? { ...item, state: "submitting" } : item,
+      ),
+    );
+
+    try {
+      const response = await fetch(
+        `/api/agent/approvals/${encodeURIComponent(approval.approvalId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision }),
+        },
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(String(response.status));
+      }
+
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "info",
+        source: "tool",
+        message:
+          decision === "approved" ?
+            `已批准 ${approval.toolName}`
+          : `已拒绝 ${approval.toolName}`,
+      });
+    } catch (error) {
+      setPendingApprovals((current) =>
+        current.map((item) =>
+          item.approvalId === approval.approvalId ? { ...item, state: "pending" } : item,
+        ),
+      );
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "error",
+        source: "tool",
+        message:
+          error instanceof Error ? `审批提交失败：${error.message}` : "审批提交失败",
+      });
+    }
+  }
+
+  async function stopStreaming() {
+    const runId = activeRun?.runId;
+
+    if (runId) {
+      setActiveRun((current) =>
+        current?.runId === runId ? { ...current, status: "cancelling" } : current,
+      );
+
+      try {
+        const response = await fetch(
+          `/api/agent/runs/${encodeURIComponent(runId)}/cancel`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: "user_cancelled" }),
+          },
+        );
+
+        if (response.status === 401) {
+          handleUnauthorized();
+        } else if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+      } catch (error) {
+        appendConsoleLog({
+          at: new Date().toISOString(),
+          level: "error",
+          source: "agent",
+          message:
+            error instanceof Error ? `停止运行失败：${error.message}` : "停止运行失败",
+        });
+      }
+    }
+
     abortControllerRef.current?.abort();
+    setPendingApprovals((current) =>
+      runId ? current.filter((approval) => approval.runId !== runId) : current,
+    );
+    setActiveRun((current) => (runId && current?.runId === runId ? null : current));
+    setMessages((current) =>
+      current.map((message) =>
+        message.role === "assistant" && message.status === "streaming" ?
+          {
+            ...message,
+            content: message.content.trim() ? message.content : "已停止。",
+            status: "aborted",
+          }
+        : message,
+      ),
+    );
     setIsStreaming(false);
   }
 
@@ -1353,39 +1550,90 @@ export function ChatWorkspace() {
           </button>
         )}
 
-        <form className="composer" onSubmit={submit}>
-          <button className="icon-button" type="button" aria-label="添加附件">
-            <Paperclip size={19} />
-          </button>
-          <textarea
-            aria-label="消息"
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="有问题，尽管问"
-            rows={1}
-            value={input}
-          />
-          <button className="mode-button" type="button">
-            DeepSeek
-          </button>
-          <button className="icon-button" type="button" aria-label="语音输入">
-            <Mic size={18} />
-          </button>
-          {isStreaming ? (
-            <button className="send-button" type="button" onClick={stopStreaming}>
-              <CircleStop size={19} />
-            </button>
-          ) : (
-            <button className="send-button" type="submit" aria-label="发送">
-              <Send size={18} />
-            </button>
+        <div className="composer-stack">
+          {(activeRun || pendingApprovals.length > 0) && (
+            <section className="run-panel" aria-label="运行状态">
+              {activeRun && (
+                <div className="run-status-row">
+                  <span className={`run-status-dot ${activeRun.status}`} aria-hidden="true" />
+                  <span className="run-status-copy">
+                    <strong>运行 {shortRunId(activeRun.runId)}</strong>
+                    <span>{runStatusLabel(activeRun.status)}</span>
+                  </span>
+                </div>
+              )}
+              {pendingApprovals.map((approval) => (
+                <div className="approval-row" key={approval.approvalId}>
+                  <span className="approval-copy">
+                    <strong>{approval.toolName}</strong>
+                    <span>{approval.reason}</span>
+                  </span>
+                  <span className="approval-actions">
+                    <button
+                      aria-label={`批准 ${approval.toolName}`}
+                      className="approval-action approve"
+                      disabled={approval.state === "submitting"}
+                      onClick={() => void resolveApproval(approval, "approved")}
+                      title="批准"
+                      type="button"
+                    >
+                      <Check size={16} />
+                    </button>
+                    <button
+                      aria-label={`拒绝 ${approval.toolName}`}
+                      className="approval-action reject"
+                      disabled={approval.state === "submitting"}
+                      onClick={() => void resolveApproval(approval, "rejected")}
+                      title="拒绝"
+                      type="button"
+                    >
+                      <X size={16} />
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </section>
           )}
-        </form>
+
+          <form className="composer" onSubmit={submit}>
+            <button className="icon-button" type="button" aria-label="添加附件">
+              <Paperclip size={19} />
+            </button>
+            <textarea
+              aria-label="消息"
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="有问题，尽管问"
+              rows={1}
+              value={input}
+            />
+            <button className="mode-button" type="button">
+              DeepSeek
+            </button>
+            <button className="icon-button" type="button" aria-label="语音输入">
+              <Mic size={18} />
+            </button>
+            {isStreaming ? (
+              <button
+                aria-label="停止"
+                className="send-button"
+                onClick={() => void stopStreaming()}
+                type="button"
+              >
+                <CircleStop size={19} />
+              </button>
+            ) : (
+              <button className="send-button" type="submit" aria-label="发送">
+                <Send size={18} />
+              </button>
+            )}
+          </form>
+        </div>
       </section>
     </main>
   );
