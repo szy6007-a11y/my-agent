@@ -478,6 +478,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
 .console-log-list {
   display: grid;
+  align-content: start;
   min-height: 56px;
   gap: 9px;
   overflow: auto;
