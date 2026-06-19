@@ -27,7 +27,7 @@ export type SkillBundle = {
   files: SkillBundleFile[];
   identifier: string;
   metadata: Record<string, unknown>;
-  source: "github";
+  source: "agent" | "github";
   trustLevel: "builtin" | "trusted" | "community";
 };
 

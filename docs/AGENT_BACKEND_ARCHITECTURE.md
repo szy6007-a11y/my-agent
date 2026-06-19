@@ -628,6 +628,14 @@ GitHub Skill 安装是受治理的包管理能力，不是把远端 Markdown 直
 - GitHub 下载必须拒绝路径穿越、绝对路径、symlink/submodule、超大 bundle、平台不兼容和缺失根级 `SKILL.md` 的包。
 - 验收命令：`RUN_GITHUB_SKILL_E2E=true npx tsx --test src/agent/skills/GithubSkillAgentFlow.e2e.test.ts`。该测试会真实输入“下载 GitHub skill 并安装后使用”，自动审批，验证下载、启用、加载和应用闭环。
 
+Agent 自我改进循环参考 Hermes 的 background review：
+
+- 每个 run 完成后，`AgentLoop` 异步触发 `BackgroundReviewAgent`，不阻塞用户响应，也不把复盘 prompt 写入主会话历史。
+- `MEMORY_REVIEW_INTERVAL` 按用户轮次触发 memory review；默认每 10 个用户轮次检查一次稳定事实，只开放 `memory` 工具。
+- `SKILL_REVIEW_INTERVAL` 按累计 tool-calling iteration 触发 skill review；默认每 10 次工具迭代检查一次可复用流程，只开放 `skills_list`、`skill_view`、`Skill`、`list_installed_skills` 和 `skill_manage`。
+- `skill_manage` 支持 `create`、`edit`、`patch`、`write_file`、`remove_file`。写入必须进入用户作用域 active skills 目录，并同步记录 `installed_skills`、`skill_versions`、`skill_files` 与 `skill_audit_events`。
+- 前台调用 `skill_manage` 仍按写操作走审批；后台 review 使用受限工具集直接写入，但 prompt 明确禁止保存任务进度、临时错误、密钥、一次性叙事和删除 skill。
+
 ### MCP
 
 MCP Gateway 负责：

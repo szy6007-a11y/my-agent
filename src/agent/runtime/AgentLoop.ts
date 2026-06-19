@@ -271,7 +271,22 @@ export class AgentLoop {
     const maxToolRounds = resolveMaxToolRounds(this.options.maxToolRounds);
     const permissionMode = input.permissionMode ?? "ask-on-write";
     const readFileState = new FileReadState();
+    let toolIterations = 0;
     let lastRunStatusPollAt = 0;
+    const scheduleBackgroundReview = () => {
+      void this.backgroundReview
+        .maybeRun({
+          model: input.model,
+          runId: input.runId,
+          sessionId: input.sessionId,
+          thinking: input.thinking,
+          toolIterations,
+          userId: input.userId,
+        })
+        .catch((error) => {
+          console.error("Background self-improvement review failed", error);
+        });
+    };
     const abortIfRequested = async (force = false): Promise<AgentEvent | null> => {
       if (input.signal.aborted) {
         await this.sessions.updateRunStatus(input.runId, "aborted");
@@ -681,17 +696,7 @@ export class AgentLoop {
           });
 
           await this.sessions.updateRunStatus(input.runId, "completed");
-          void this.backgroundReview
-            .maybeRun({
-              model: input.model,
-              runId: input.runId,
-              sessionId: input.sessionId,
-              thinking: input.thinking,
-              userId: input.userId,
-            })
-            .catch((error) => {
-              console.error("Background memory review failed", error);
-            });
+          scheduleBackgroundReview();
           await this.hooks.runMessageEnd({
             runId: input.runId,
             sessionId: input.sessionId,
@@ -707,6 +712,7 @@ export class AgentLoop {
           return;
         }
 
+        toolIterations += 1;
         const assistantToolContent = visibleToolCallViolation ? "" : passText;
         if (assistantToolContent && !passTextMovedToReasoning) {
           visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
@@ -1079,17 +1085,7 @@ export class AgentLoop {
         sessionId: input.sessionId,
       });
       await this.sessions.updateRunStatus(input.runId, "completed");
-      void this.backgroundReview
-        .maybeRun({
-          model: input.model,
-          runId: input.runId,
-          sessionId: input.sessionId,
-          thinking: input.thinking,
-          userId: input.userId,
-        })
-        .catch((error) => {
-          console.error("Background memory review failed", error);
-        });
+      scheduleBackgroundReview();
       await this.hooks.runMessageEnd({
         runId: input.runId,
         sessionId: input.sessionId,
