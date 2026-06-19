@@ -45,6 +45,16 @@ function isPrivateIpv4(ip: string): boolean {
   );
 }
 
+function isBenchmarkIpv4(ip: string): boolean {
+  const parts = ip.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+
+  return a === 198 && (b === 18 || b === 19);
+}
+
 function ipv4FromMappedIpv6(ip: string): string | undefined {
   const lower = ip.toLowerCase();
   if (!lower.startsWith("::ffff:")) {
@@ -75,6 +85,16 @@ function isBlockedIp(ip: string): boolean {
     return true;
   }
   return false;
+}
+
+export function isBlockedHostnameResolutionAddress(ip: string): boolean {
+  const mapped = ipv4FromMappedIpv6(ip);
+  const candidate = mapped ?? ip;
+  if (isIP(candidate) === 4 && isBenchmarkIpv4(candidate)) {
+    return false;
+  }
+
+  return isBlockedIp(ip);
 }
 
 export function normalizeUrlForRequest(raw: string): string {
@@ -145,7 +165,7 @@ export async function validateExternalUrl(raw: string): Promise<UrlSafetyResult>
       return { ok: false, reason: "Blocked: URL hostname did not resolve.", url: normalized };
     }
     for (const address of addresses) {
-      if (isBlockedIp(address.address)) {
+      if (isBlockedHostnameResolutionAddress(address.address)) {
         return {
           ok: false,
           reason: "Blocked: URL resolves to a private or internal network address.",

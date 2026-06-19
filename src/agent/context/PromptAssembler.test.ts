@@ -16,6 +16,7 @@ test("PromptAssembler includes the production output protocol contract", async (
   assert.match(assembly.prompt, /<output_protocol_guidance/);
   assert.match(assembly.prompt, /工具只能通过系统原生 tool call 通道调用/);
   assert.match(assembly.prompt, /禁止把工具调用写成 XML、HTML、Markdown、JSON、函数调用文本、DSML/);
+  assert.match(assembly.prompt, /不要把“某站点被 block\/blocked”“工具受限”“我换个方向搜索”等检索过程写进最终正文/);
   assert.match(assembly.prompt, /如果 `SKILL\.md` 明确要求调用某个工具/);
   assert.match(assembly.prompt, /不要用普通正文回答、承诺、追问、列计划或复述工具名来替代/);
 });
