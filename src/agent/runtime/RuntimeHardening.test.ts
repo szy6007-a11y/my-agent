@@ -61,6 +61,7 @@ class FakeSessionRepository {
   readonly updatedMessages: Array<{ content: string; messageId: string }> = [];
   approvalDecision: "approved" | "rejected" | "expired" = "approved";
   promptSnapshot: PromptAssembly | null = makePrompt("static prompt");
+  runStatus: RunStatus | null = null;
 
   constructor(messages: AgentMessage[] = []) {
     this.messages = [...messages];
@@ -89,6 +90,10 @@ class FakeSessionRepository {
 
   async updateRunStatus(_runId: string, status: RunStatus): Promise<void> {
     this.statuses.push(status);
+  }
+
+  async getRunStatus(): Promise<RunStatus | null> {
+    return this.runStatus;
   }
 
   async appendMessage(input: {
@@ -337,6 +342,51 @@ test("AgentLoop recovers once when the model writes a visible tool call", async 
   assert.equal(events.some((event) => event.type === "protocol.recovery"), true);
   assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
   assert.equal(sessions.messages.at(-1)?.content, "已恢复。");
+});
+
+test("AgentLoop stops when the persisted run is cancelled", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "请生成长回复",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  sessions.runStatus = "aborted";
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    new FinalTextModelRouter() as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      runId: "run_cancelled",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: "run.aborted",
+      runId: "run_cancelled",
+      reason: "user_cancelled",
+    },
+  ]);
+  assert.equal(sessions.statuses.length, 0);
+  assert.equal(sessions.messages.length, 1);
 });
 
 test("AgentLoop waits for approval and executes write tools after confirmation", async () => {

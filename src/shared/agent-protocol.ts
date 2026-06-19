@@ -153,6 +153,10 @@ export type AgentEvent =
   | { type: "run.failed"; runId: string; error: string }
   | { type: "run.aborted"; runId: string; reason: string };
 
+export type SequencedAgentEvent = AgentEvent & {
+  seq: number;
+};
+
 export type AgentRunRequest = {
   sessionId?: string | null;
   agentId?: string;

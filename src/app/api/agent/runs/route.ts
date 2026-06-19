@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
           request.signal,
           auth.user.id,
         )) {
-          controller.enqueue(encoder.encode(encodeAgentEvent(event)));
+          controller.enqueue(encoder.encode(encodeAgentEvent(event, { id: event.seq })));
         }
       } catch (error) {
         const message =

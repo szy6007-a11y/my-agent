@@ -11,6 +11,7 @@ export type {
   ModelToolDefinition,
   PermissionMode,
   RunStatus,
+  SequencedAgentEvent,
   ToolApprovalStatus,
   ToolRisk,
   ToolUiManifest,

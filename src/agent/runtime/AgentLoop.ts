@@ -38,6 +38,7 @@ import {
 
 const MAX_TOOL_ROUNDS = 6;
 const MAX_PROTOCOL_RECOVERY_ATTEMPTS = 1;
+const RUN_CANCEL_POLL_INTERVAL_MS = 500;
 const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
   "工具调用轮次已经达到上限。请停止调用工具，基于上面已经返回的工具结果给出当前可支持的最终回答；如果证据不足，请说明限制和已经查到的信息。";
 const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
@@ -179,6 +180,30 @@ export class AgentLoop {
   }): AsyncGenerator<AgentEvent> {
     const tools = this.createTools();
     const permissionMode = input.permissionMode ?? "ask-on-write";
+    let lastRunStatusPollAt = 0;
+    const abortIfRequested = async (force = false): Promise<AgentEvent | null> => {
+      if (input.signal.aborted) {
+        await this.sessions.updateRunStatus(input.runId, "aborted");
+        return { type: "run.aborted", runId: input.runId, reason: "client_aborted" };
+      }
+
+      const now = Date.now();
+      if (!force && now - lastRunStatusPollAt < RUN_CANCEL_POLL_INTERVAL_MS) {
+        return null;
+      }
+
+      lastRunStatusPollAt = now;
+      const status = await this.sessions.getRunStatus(input.runId);
+      return status === "aborted" ?
+          { type: "run.aborted", runId: input.runId, reason: "user_cancelled" }
+        : null;
+    };
+    const initialAbort = await abortIfRequested(true);
+    if (initialAbort) {
+      yield initialAbort;
+      return;
+    }
+
     await this.sessions.updateRunStatus(input.runId, "streaming_model");
     yield { type: "run.started", runId: input.runId };
 
@@ -310,6 +335,12 @@ export class AgentLoop {
 
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+        const roundAbort = await abortIfRequested(true);
+        if (roundAbort) {
+          yield roundAbort;
+          return;
+        }
+
         await this.sessions.updateRunStatus(input.runId, "streaming_model");
         let passText = "";
         let visiblePassText = "";
@@ -341,9 +372,9 @@ export class AgentLoop {
           tools: tools.definitions,
           userId: input.userId,
         })) {
-          if (input.signal.aborted) {
-            await this.sessions.updateRunStatus(input.runId, "aborted");
-            yield { type: "run.aborted", runId: input.runId, reason: "client_aborted" };
+          const streamAbort = await abortIfRequested();
+          if (streamAbort) {
+            yield streamAbort;
             return;
           }
 
@@ -480,6 +511,11 @@ export class AgentLoop {
             };
           }
 
+          const completionAbort = await abortIfRequested(true);
+          if (completionAbort) {
+            yield completionAbort;
+            return;
+          }
           const finalMessage = await this.sessions.appendMessage({
             content: visibleAssistantText,
             role: "assistant",
@@ -542,9 +578,9 @@ export class AgentLoop {
 
         await this.sessions.updateRunStatus(input.runId, "executing_tools");
         for (const toolCall of toolCalls) {
-          if (input.signal.aborted) {
-            await this.sessions.updateRunStatus(input.runId, "aborted");
-            yield { type: "run.aborted", runId: input.runId, reason: "client_aborted" };
+          const toolAbort = await abortIfRequested(true);
+          if (toolAbort) {
+            yield toolAbort;
             return;
           }
 
@@ -634,6 +670,11 @@ export class AgentLoop {
               signal: input.signal,
               userId: input.userId,
             });
+            const approvalAbort = await abortIfRequested(true);
+            if (approvalAbort) {
+              yield approvalAbort;
+              return;
+            }
             const approved = decision.status === "approved";
             yield {
               type: "tool.approval.resolved",
@@ -761,9 +802,9 @@ export class AgentLoop {
         tools: [],
         userId: input.userId,
       })) {
-        if (input.signal.aborted) {
-          await this.sessions.updateRunStatus(input.runId, "aborted");
-          yield { type: "run.aborted", runId: input.runId, reason: "client_aborted" };
+        const finalizerAbort = await abortIfRequested();
+        if (finalizerAbort) {
+          yield finalizerAbort;
           return;
         }
 
@@ -835,6 +876,11 @@ export class AgentLoop {
         };
       }
 
+      const completionAbort = await abortIfRequested(true);
+      if (completionAbort) {
+        yield completionAbort;
+        return;
+      }
       const finalMessage = await this.sessions.appendMessage({
         content: visibleAssistantText,
         role: "assistant",

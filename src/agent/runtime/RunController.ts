@@ -1,4 +1,8 @@
-import type { AgentEvent, AgentRunRequest } from "@/agent/runtime/types";
+import type {
+  AgentEvent,
+  AgentRunRequest,
+  SequencedAgentEvent,
+} from "@/agent/runtime/types";
 import { AgentLoop } from "@/agent/runtime/AgentLoop";
 import {
   sessionRepository,
@@ -21,7 +25,7 @@ export class RunController {
     request: AgentRunRequest,
     signal: AbortSignal,
     userId: string,
-  ): AsyncGenerator<AgentEvent> {
+  ): AsyncGenerator<SequencedAgentEvent> {
     const model = request.model ?? deepseekModels.default;
     const permissionMode = request.permissionMode ?? "ask-on-write";
     const thinking = request.thinking ?? "disabled";
@@ -70,8 +74,18 @@ export class RunController {
     }
   }
 
-  private async *emit(runId: string, event: AgentEvent): AsyncGenerator<AgentEvent> {
-    await this.sessions.appendRunEvent(runId, event);
-    yield event;
+  private async *emit(
+    runId: string,
+    event: AgentEvent,
+  ): AsyncGenerator<SequencedAgentEvent> {
+    const seq = await this.sessions.appendRunEvent(runId, event);
+    if (seq === null) {
+      throw new Error(`Run event could not be persisted: ${event.type}`);
+    }
+
+    yield {
+      ...event,
+      seq,
+    };
   }
 }

@@ -10,11 +10,13 @@ import type {
   AgentRole,
   ModelToolCall,
   RunStatus,
+  SequencedAgentEvent,
   ToolApprovalStatus,
   ToolRisk,
 } from "@/agent/runtime/types";
 import type { PromptAssembly } from "@/agent/context/PromptAssembler";
 import { CONTEXT_SUMMARY_KIND } from "@/agent/context/ContextSummary";
+import { isTerminalRunStatus } from "@/agent/runtime/RunEvents";
 import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 import { assertDatabaseMigrated } from "@/server/db/readiness";
@@ -63,6 +65,24 @@ type PromptSnapshotRow = {
   prompt_snapshot_json: unknown;
 };
 
+type StoredAgentRunRow = {
+  id: string;
+  session_id: string;
+  status: string;
+  model: string;
+  permission_mode: string;
+  started_at: Date | null;
+  ended_at: Date | null;
+  error_json: unknown;
+  created_at: Date;
+};
+
+type StoredRunEventRow = {
+  id: number;
+  payload_json: unknown;
+  created_at: Date;
+};
+
 type ToolApprovalRow = {
   id: string;
   status: ToolApprovalStatus;
@@ -86,6 +106,24 @@ export type StoredChatSession = {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+};
+
+export type StoredAgentRun = {
+  id: string;
+  sessionId: string;
+  status: RunStatus;
+  model: string;
+  permissionMode: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  error: unknown;
+  createdAt: string;
+};
+
+export type StoredRunEvent = {
+  id: number;
+  event: SequencedAgentEvent;
+  createdAt: string;
 };
 
 export type SessionSearchMessage = {
@@ -178,6 +216,47 @@ function isToolApprovalStatus(value: unknown): value is ToolApprovalStatus {
     value === "rejected" ||
     value === "expired"
   );
+}
+
+function isRunStatus(value: unknown): value is RunStatus {
+  return (
+    value === "queued" ||
+    value === "preparing" ||
+    value === "streaming_model" ||
+    value === "waiting_approval" ||
+    value === "executing_tools" ||
+    value === "compacting" ||
+    value === "finalizing" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "aborted" ||
+    value === "expired"
+  );
+}
+
+function toStoredRun(row: StoredAgentRunRow): StoredAgentRun {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    status: isRunStatus(row.status) ? row.status : "failed",
+    model: row.model,
+    permissionMode: row.permission_mode,
+    startedAt: row.started_at?.toISOString() ?? null,
+    endedAt: row.ended_at?.toISOString() ?? null,
+    error: row.error_json,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+function toStoredRunEvent(row: StoredRunEventRow): StoredRunEvent {
+  return {
+    id: row.id,
+    event: {
+      ...(row.payload_json as AgentEvent),
+      seq: row.id,
+    },
+    createdAt: row.created_at.toISOString(),
+  };
 }
 
 function toToolApproval(row: ToolApprovalRow): StoredToolApproval {
@@ -743,6 +822,48 @@ export class SessionRepository {
     return { id };
   }
 
+  async getRunForUser(input: {
+    runId: string;
+    userId: string;
+  }): Promise<StoredAgentRun | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<StoredAgentRunRow[]>`
+      select
+        id,
+        session_id,
+        status,
+        model,
+        permission_mode,
+        started_at,
+        ended_at,
+        error_json,
+        created_at
+      from agent_runs
+      where id = ${input.runId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      limit 1
+    `;
+
+    return rows[0] ? toStoredRun(rows[0]) : null;
+  }
+
+  async getRunStatus(runId: string): Promise<RunStatus | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<{ status: string }[]>`
+      select status
+      from agent_runs
+      where id = ${runId}
+        and environment = ${serverEnv.APP_ENV}
+      limit 1
+    `;
+    const status = rows[0]?.status;
+
+    return isRunStatus(status) ? status : null;
+  }
+
   async updateRunStatus(runId: string, status: RunStatus, error?: unknown) {
     await ready();
     const db = getSql();
@@ -762,38 +883,173 @@ export class SessionRepository {
         error_json = ${error ? db.json(toJson(error)) : null}
       where id = ${runId}
         and environment = ${serverEnv.APP_ENV}
+        and (
+          status not in ('completed', 'failed', 'aborted', 'expired')
+          or status = ${status}
+        )
     `;
   }
 
-  async appendRunEvent(runId: string, event: AgentEvent) {
+  async appendRunEvent(runId: string, event: AgentEvent): Promise<number | null> {
     await ready();
     const db = getSql();
 
     if (event.type === "tool.approval.resolved") {
-      await db`
-        insert into run_events (run_id, type, payload_json)
-        select id, ${event.type}, ${db.json(toJson(event))}
-        from agent_runs
-        where id = ${runId}
-          and environment = ${serverEnv.APP_ENV}
-          and not exists (
-            select 1
-            from run_events existing
-            where existing.run_id = agent_runs.id
-              and existing.type = ${event.type}
-              and existing.payload_json->>'approvalId' = ${event.approvalId}
-          )
+      const rows = await db<{ id: number }[]>`
+        with inserted as (
+          insert into run_events (run_id, type, payload_json)
+          select id, ${event.type}, ${db.json(toJson(event))}
+          from agent_runs
+          where id = ${runId}
+            and environment = ${serverEnv.APP_ENV}
+            and not exists (
+              select 1
+              from run_events existing
+              where existing.run_id = agent_runs.id
+                and existing.type = ${event.type}
+                and existing.payload_json->>'approvalId' = ${event.approvalId}
+            )
+          returning id
+        )
+        select id
+        from inserted
+        union all
+        select existing.id
+        from run_events existing
+        join agent_runs r on r.id = existing.run_id
+        where r.id = ${runId}
+          and r.environment = ${serverEnv.APP_ENV}
+          and existing.type = ${event.type}
+          and existing.payload_json->>'approvalId' = ${event.approvalId}
+        limit 1
       `;
-      return;
+      return rows[0]?.id ?? null;
     }
 
-    await db`
+    if (event.type === "run.aborted") {
+      const rows = await db<{ id: number }[]>`
+        with inserted as (
+          insert into run_events (run_id, type, payload_json)
+          select id, ${event.type}, ${db.json(toJson(event))}
+          from agent_runs
+          where id = ${runId}
+            and environment = ${serverEnv.APP_ENV}
+            and not exists (
+              select 1
+              from run_events existing
+              where existing.run_id = agent_runs.id
+                and existing.type = ${event.type}
+            )
+          returning id
+        )
+        select id
+        from inserted
+        union all
+        select existing.id
+        from run_events existing
+        join agent_runs r on r.id = existing.run_id
+        where r.id = ${runId}
+          and r.environment = ${serverEnv.APP_ENV}
+          and existing.type = ${event.type}
+        limit 1
+      `;
+      return rows[0]?.id ?? null;
+    }
+
+    const rows = await db<{ id: number }[]>`
       insert into run_events (run_id, type, payload_json)
       select id, ${event.type}, ${db.json(toJson(event))}
       from agent_runs
       where id = ${runId}
         and environment = ${serverEnv.APP_ENV}
+      returning id
     `;
+
+    return rows[0]?.id ?? null;
+  }
+
+  async listRunEvents(input: {
+    afterId?: number;
+    limit?: number;
+    runId: string;
+    userId: string;
+  }): Promise<StoredRunEvent[]> {
+    await ready();
+    const db = getSql();
+    const afterId = input.afterId ?? 0;
+    const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
+    const rows = await db<StoredRunEventRow[]>`
+      select e.id, e.payload_json, e.created_at
+      from run_events e
+      join agent_runs r on r.id = e.run_id
+      where r.id = ${input.runId}
+        and r.user_id = ${input.userId}
+        and r.environment = ${serverEnv.APP_ENV}
+        and e.id > ${afterId}
+      order by e.id asc
+      limit ${limit}
+    `;
+
+    return rows.map(toStoredRunEvent);
+  }
+
+  async abortRunForUser(input: {
+    reason?: string;
+    runId: string;
+    userId: string;
+  }): Promise<StoredAgentRun | null> {
+    await ready();
+    const db = getSql();
+    const current = await this.getRunForUser({
+      runId: input.runId,
+      userId: input.userId,
+    });
+
+    if (!current) {
+      return null;
+    }
+
+    if (!isTerminalRunStatus(current.status)) {
+      const reason = input.reason?.trim() || "user_cancelled";
+      const updated = await db<{ id: string }[]>`
+        update agent_runs
+        set
+          status = 'aborted',
+          ended_at = now(),
+          error_json = ${db.json(toJson({ reason }))}
+        where id = ${input.runId}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+          and status not in ('completed', 'failed', 'aborted', 'expired')
+        returning id
+      `;
+      if (updated[0]) {
+        await db`
+          update tool_approvals
+          set
+            status = 'expired',
+            decision_json = ${db.json(toJson({
+              decision: "expired",
+              reason: "Run was cancelled before approval resolved.",
+            }))},
+            resolved_at = now()
+          where run_id = ${input.runId}
+            and user_id = ${input.userId}
+            and environment = ${serverEnv.APP_ENV}
+            and status = 'pending'
+        `;
+        await this.appendRunEvent(input.runId, {
+          type: "run.aborted",
+          runId: input.runId,
+          reason,
+        });
+      }
+    }
+
+    return this.getRunForUser({
+      runId: input.runId,
+      userId: input.userId,
+    });
   }
 
   async createToolApproval(input: {

@@ -5,7 +5,7 @@ import {
 } from "@/agent/sessions/SessionRepository";
 
 export type ApprovalRepository = {
-  appendRunEvent(runId: string, event: AgentEvent): Promise<void>;
+  appendRunEvent(runId: string, event: AgentEvent): Promise<number | null>;
   getToolApprovalForUser(input: {
     approvalId: string;
     userId: string;

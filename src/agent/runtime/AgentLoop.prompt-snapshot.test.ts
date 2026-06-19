@@ -105,6 +105,7 @@ class FakeSessionRepository {
   readonly messages: AgentMessage[] = [];
   readonly statuses: RunStatus[] = [];
   promptSnapshot: PromptAssembly | null = null;
+  runStatus: RunStatus | null = null;
   savedSnapshots = 0;
 
   async getPromptSnapshot(): Promise<PromptAssembly | null> {
@@ -126,6 +127,10 @@ class FakeSessionRepository {
 
   async updateRunStatus(_runId: string, status: RunStatus): Promise<void> {
     this.statuses.push(status);
+  }
+
+  async getRunStatus(): Promise<RunStatus | null> {
+    return this.runStatus;
   }
 
   async appendMessage(input: {
