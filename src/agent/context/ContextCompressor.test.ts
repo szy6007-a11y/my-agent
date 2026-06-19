@@ -218,3 +218,75 @@ test("ContextEngine includes latest compacted summary plus uncovered live messag
   assert.equal(context.messages.at(-1)?.content, tail.at(-1)?.content);
   assert.ok(context.messages.every((message) => message.content !== oldSummary.content));
 });
+
+test("ContextEngine preserves live tool call history for the model payload", async () => {
+  const { ContextEngine } = await import("@/agent/context/ContextEngine");
+  const engine = new ContextEngine();
+
+  const context = engine.build({
+    messages: [
+      {
+        id: "msg_user",
+        content: "查一下 release 信息",
+        createdAt: new Date(0).toISOString(),
+        role: "user",
+      },
+      {
+        id: "msg_assistant_tool",
+        content: "",
+        createdAt: new Date(1).toISOString(),
+        role: "assistant",
+        toolCalls: [
+          {
+            arguments: JSON.stringify({ query: "release 信息" }),
+            id: "call_search",
+            name: "web_search",
+          },
+        ],
+      },
+      {
+        id: "msg_tool",
+        content: JSON.stringify({ results: [{ title: "release note" }] }),
+        createdAt: new Date(2).toISOString(),
+        role: "tool",
+        toolCallId: "call_search",
+        toolName: "web_search",
+      },
+      {
+        id: "msg_assistant_final",
+        content: "查到了 release note。",
+        createdAt: new Date(3).toISOString(),
+        role: "assistant",
+      },
+    ],
+    promptSnapshot: makePrompt("static system prompt"),
+  });
+
+  assert.deepEqual(context.messages.slice(1), [
+    {
+      role: "user",
+      content: "查一下 release 信息",
+    },
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [
+        {
+          arguments: JSON.stringify({ query: "release 信息" }),
+          id: "call_search",
+          name: "web_search",
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: JSON.stringify({ results: [{ title: "release note" }] }),
+      toolCallId: "call_search",
+    },
+    {
+      role: "assistant",
+      content: "查到了 release note。",
+    },
+  ]);
+  assert.ok(context.tokenEstimate > 0);
+});
