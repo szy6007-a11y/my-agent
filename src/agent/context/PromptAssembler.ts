@@ -24,6 +24,7 @@ export type PromptSection = {
 export type PromptAssembly = {
   metadata?: {
     availableToolsHash: string;
+    hermesGuidanceHash?: string;
     promptVersion: string;
     skillIndexHash: string;
   };
@@ -45,8 +46,20 @@ export type PromptAssemblerInput = {
   userId?: string;
 };
 
-const PROMPT_VERSION = "2026-06-19.output-protocol-v1";
+const PROMPT_VERSION = "2026-06-19.hermes-tool-guidance-v3";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
+const TOOL_USE_ENFORCEMENT_MODELS = [
+  "gpt",
+  "codex",
+  "gemini",
+  "gemma",
+  "grok",
+  "glm",
+  "qwen",
+  "deepseek",
+] as const;
+const GOOGLE_MODEL_OPERATIONAL_GUIDANCE_MODELS = ["gemini", "gemma"] as const;
+const OPENAI_MODEL_EXECUTION_GUIDANCE_MODELS = ["gpt", "codex", "grok"] as const;
 
 function promptFilePath(filename: string): string {
   return join(process.cwd(), "rules", "prompts", "system", filename);
@@ -135,9 +148,58 @@ function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function buildAvailableToolsSection(availableTools: string[] | undefined): PromptSection {
-  const tools = [...new Set(availableTools ?? [])].sort();
+function normalizeAvailableTools(availableTools: string[] | undefined): string[] {
+  return [...new Set(availableTools ?? [])].sort();
+}
 
+function modelMatches(model: string | undefined, patterns: readonly string[]): boolean {
+  const modelLower = (model ?? "").toLowerCase();
+
+  return patterns.some((pattern) => modelLower.includes(pattern));
+}
+
+function buildHermesToolGuidanceSections(
+  input: RequiredPromptInput,
+  availableTools: string[],
+): PromptSection[] {
+  if (availableTools.length === 0) {
+    return [];
+  }
+
+  const sections: PromptSection[] = [
+    {
+      ...readPromptFragment("hermes-task-completion-guidance.md"),
+      tag: "hermes_task_completion_guidance",
+    },
+  ];
+
+  if (!modelMatches(input.model, TOOL_USE_ENFORCEMENT_MODELS)) {
+    return sections;
+  }
+
+  sections.push({
+    ...readPromptFragment("hermes-tool-use-enforcement-guidance.md"),
+    tag: "hermes_tool_use_enforcement_guidance",
+  });
+
+  if (modelMatches(input.model, GOOGLE_MODEL_OPERATIONAL_GUIDANCE_MODELS)) {
+    sections.push({
+      ...readPromptFragment("hermes-google-model-operational-guidance.md"),
+      tag: "hermes_google_model_operational_guidance",
+    });
+  }
+
+  if (modelMatches(input.model, OPENAI_MODEL_EXECUTION_GUIDANCE_MODELS)) {
+    sections.push({
+      ...readPromptFragment("hermes-openai-model-execution-guidance.md"),
+      tag: "hermes_openai_model_execution_guidance",
+    });
+  }
+
+  return sections;
+}
+
+function buildAvailableToolsSectionFromNames(tools: string[]): PromptSection {
   if (tools.length === 0) {
     return {
       content:
@@ -292,6 +354,8 @@ function normalizeInput(input: PromptAssemblerInput): RequiredPromptInput {
 export class PromptAssembler {
   assemble(rawInput: PromptAssemblerInput = {}): PromptAssembly {
     const input = normalizeInput(rawInput);
+    const availableTools = normalizeAvailableTools(input.availableTools);
+    const hermesToolGuidanceSections = buildHermesToolGuidanceSections(input, availableTools);
     const soulIdentity = loadSoulIdentity(input.cwd);
 
     const identity = soulIdentity
@@ -312,9 +376,15 @@ export class PromptAssembler {
       { ...readPromptFragment("runtime-guidance.md"), tag: "runtime_guidance" },
       { ...readPromptFragment("interaction-contract.md"), tag: "interaction_contract" },
       { ...readPromptFragment("context-discipline.md"), tag: "context_discipline" },
+      ...hermesToolGuidanceSections.filter(
+        (section) => section.tag === "hermes_task_completion_guidance",
+      ),
       { ...readPromptFragment("tool-guidance.md"), tag: "tool_guidance" },
       { ...readPromptFragment("output-protocol-guidance.md"), tag: "output_protocol_guidance" },
-      buildAvailableToolsSection(input.availableTools),
+      buildAvailableToolsSectionFromNames(availableTools),
+      ...hermesToolGuidanceSections.filter(
+        (section) => section.tag !== "hermes_task_completion_guidance",
+      ),
       { ...readPromptFragment("software-engineering-guidance.md"), tag: "software_engineering_guidance" },
       { ...readPromptFragment("file-operation-guidance.md"), tag: "file_operation_guidance" },
       { ...readPromptFragment("planning-guidance.md"), tag: "planning_guidance" },
@@ -346,14 +416,21 @@ export class PromptAssembler {
     const prompt = `<system_prompt version="${PROMPT_VERSION}">\n${tiers.stable}\n\n${tiers.context}\n\n${tiers.volatile}\n</system_prompt>`;
     const skillSection = stable.find((section) => section.tag === "available_skills");
     const toolsSection = stable.find((section) => section.tag === "available_tools");
+    const hermesGuidanceHash = hashText(
+      hermesToolGuidanceSections
+        .map((section) => `${section.tag}\n${section.content.trim()}`)
+        .join("\n\n"),
+    );
     const metadata = {
       availableToolsHash: hashText(toolsSection?.content ?? ""),
+      hermesGuidanceHash,
       promptVersion: PROMPT_VERSION,
       skillIndexHash: hashText(skillSection?.content ?? ""),
     };
     const signature = hashText(
       JSON.stringify({
         availableToolsHash: metadata.availableToolsHash,
+        hermesGuidanceHash: metadata.hermesGuidanceHash,
         promptVersion: metadata.promptVersion,
         skillIndexHash: metadata.skillIndexHash,
       }),

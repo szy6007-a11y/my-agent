@@ -85,6 +85,7 @@ export function promptSnapshotIsFresh(
     return (
       stored.metadata.promptVersion === current.metadata.promptVersion &&
       stored.metadata.availableToolsHash === current.metadata.availableToolsHash &&
+      (stored.metadata.hermesGuidanceHash ?? "") === (current.metadata.hermesGuidanceHash ?? "") &&
       stored.metadata.skillIndexHash === current.metadata.skillIndexHash
     );
   }
