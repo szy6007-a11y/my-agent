@@ -21,6 +21,11 @@ import { isTerminalRunStatus } from "@/agent/runtime/RunEvents";
 import { getSql } from "@/lib/db";
 import { serverEnv } from "@/lib/env";
 import { assertDatabaseMigrated } from "@/server/db/readiness";
+import {
+  SYSTEM_REMINDER_CLOSE_TAG,
+  TRUSTED_SYSTEM_REMINDER_SENTINEL,
+  stripTrustedRuntimeReminder,
+} from "@/shared/runtime-reminder";
 
 type StoredMessageRow = {
   id: string;
@@ -47,6 +52,7 @@ type StoredMessageWithSessionRow = StoredMessageRow & {
 
 type SearchHitRow = StoredMessageRow & {
   rank: number | null;
+  searchable_text: string;
   session_created_at: Date;
   session_id: string;
   session_title: string;
@@ -129,6 +135,7 @@ export type StoredRunEvent = {
 };
 
 export type SessionSearchMessage = {
+  anchor?: boolean;
   id: string;
   role: AgentRole;
   content: string;
@@ -153,6 +160,8 @@ export type SessionWindowResult = {
 };
 
 export type SessionDiscoveryResult = SessionWindowResult & {
+  bookendEndMessages: SessionSearchMessage[];
+  bookendStartMessages: SessionSearchMessage[];
   match: {
     messageId: string;
     role: AgentRole;
@@ -316,11 +325,12 @@ function toAgentMessage(row: StoredMessageRow): AgentMessage {
   };
 }
 
-function toSearchMessage(row: StoredMessageRow): SessionSearchMessage {
+function toSearchMessage(row: StoredMessageRow, anchorId?: string): SessionSearchMessage {
   return {
+    ...(anchorId && row.id === anchorId ? { anchor: true } : {}),
     id: row.id,
     role: row.role,
-    content: contentText(row),
+    content: stripTrustedRuntimeReminder(contentText(row)),
     toolCallId: row.tool_call_id,
     toolName: row.tool_name,
     createdAt: row.created_at.toISOString(),
@@ -458,7 +468,11 @@ export class SessionRepository {
     return snapshot;
   }
 
-  async listSessions(userId: string, limit = 50): Promise<StoredChatSession[]> {
+  async listSessions(
+    userId: string,
+    limit = 50,
+    input: { excludeSessionId?: string } = {},
+  ): Promise<StoredChatSession[]> {
     await ready();
     const db = getSql();
     const rows = await db<StoredSessionRow[]>`
@@ -475,6 +489,11 @@ export class SessionRepository {
       left join messages m on m.session_id = s.id
       where s.user_id = ${userId}
         and s.environment = ${serverEnv.APP_ENV}
+        ${
+          input.excludeSessionId ?
+            db`and s.id <> ${input.excludeSessionId}`
+          : db``
+        }
       group by s.id
       order by s.updated_at desc
       limit ${limit}
@@ -610,6 +629,7 @@ export class SessionRepository {
   }
 
   async discoverSessions(input: {
+    currentSessionId?: string;
     limit?: number;
     query: string;
     roleFilter?: Array<"user" | "assistant" | "tool">;
@@ -621,55 +641,86 @@ export class SessionRepository {
     const limit = Math.max(1, Math.min(input.limit ?? 3, 10));
     const query = input.query.trim();
     const roles = roleFilterFlags(input.roleFilter);
+    const searchableTextExpression = db`
+      case
+        when position(${TRUSTED_SYSTEM_REMINDER_SENTINEL} in coalesce(m.content_json->>'text', '')) > 0
+          and position(${SYSTEM_REMINDER_CLOSE_TAG} in coalesce(m.content_json->>'text', '')) > 0
+        then ltrim(substr(
+          coalesce(m.content_json->>'text', ''),
+          position(${SYSTEM_REMINDER_CLOSE_TAG} in coalesce(m.content_json->>'text', ''))
+            + char_length(${SYSTEM_REMINDER_CLOSE_TAG})
+        ))
+        else coalesce(m.content_json->>'text', '')
+      end
+    `;
     const orderBy =
-      input.sort === "oldest" ? db`s.updated_at asc, m.created_at asc`
-      : input.sort === "newest" ? db`s.updated_at desc, m.created_at desc`
-      : db`rank desc, s.updated_at desc, m.created_at desc`;
+      input.sort === "oldest" ? db`session_updated_at asc, created_at asc`
+      : input.sort === "newest" ? db`session_updated_at desc, created_at desc`
+      : db`rank desc, session_updated_at desc, created_at desc`;
 
     if (!query) {
       return [];
     }
 
     const hits = await db<SearchHitRow[]>`
-      with search_query as (
+      with message_text as (
+        select
+          s.id as session_id,
+          s.title as session_title,
+          s.created_at as session_created_at,
+          s.updated_at as session_updated_at,
+          m.id,
+          m.role,
+          m.content_json,
+          m.tool_call_id,
+          m.tool_name,
+          m.created_at,
+          ${searchableTextExpression} as searchable_text
+        from messages m
+        join sessions s on s.id = m.session_id
+        where s.user_id = ${input.userId}
+          and s.environment = ${serverEnv.APP_ENV}
+          ${
+            input.currentSessionId ?
+              db`and s.id <> ${input.currentSessionId}`
+            : db``
+          }
+          and (
+            (${roles.user} and m.role = 'user')
+            or (${roles.assistant} and m.role = 'assistant')
+            or (${roles.tool} and m.role = 'tool')
+          )
+          and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
+      ),
+      search_query as (
         select websearch_to_tsquery('simple', ${query}) as query
       )
       select
-        s.id as session_id,
-        s.title as session_title,
-        s.created_at as session_created_at,
-        s.updated_at as session_updated_at,
-        m.id,
-        m.role,
-        m.content_json,
-        m.tool_call_id,
-        m.tool_name,
-        m.created_at,
+        session_id,
+        session_title,
+        session_created_at,
+        session_updated_at,
+        id,
+        role,
+        content_json,
+        tool_call_id,
+        tool_name,
+        created_at,
+        searchable_text,
         ts_rank_cd(
-          to_tsvector('simple', coalesce(m.content_json->>'text', '')),
+          to_tsvector('simple', searchable_text),
           search_query.query
         ) as rank,
         ts_headline(
           'simple',
-          coalesce(m.content_json->>'text', ''),
+          searchable_text,
           search_query.query,
           'MaxWords=32, MinWords=8, ShortWord=2, HighlightAll=false, StartSel=<mark>, StopSel=</mark>'
         ) as snippet
-      from messages m
-      join sessions s on s.id = m.session_id
+      from message_text
       cross join search_query
-      where s.user_id = ${input.userId}
-        and s.environment = ${serverEnv.APP_ENV}
-        and (
-          (${roles.user} and m.role = 'user')
-          or (${roles.assistant} and m.role = 'assistant')
-          or (${roles.tool} and m.role = 'tool')
-        )
-        and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
-        and (
-          to_tsvector('simple', coalesce(m.content_json->>'text', '')) @@ search_query.query
-          or coalesce(m.content_json->>'text', '') ilike ${`%${query}%`}
-        )
+      where to_tsvector('simple', searchable_text) @@ search_query.query
+        or searchable_text ilike ${`%${query}%`}
       order by ${orderBy}
       limit ${limit * 6}
     `;
@@ -686,20 +737,28 @@ export class SessionRepository {
         aroundMessageId: hit.id,
         sessionId: hit.session_id,
         userId: input.userId,
-        window: 4,
+        window: 5,
       });
 
       if (!window) {
         continue;
       }
 
+      const bookends = await this.getSessionBookends({
+        bookend: 3,
+        sessionId: hit.session_id,
+        userId: input.userId,
+      });
+
       seenSessions.add(hit.session_id);
       results.push({
         ...window,
+        bookendEndMessages: bookends?.end ?? [],
+        bookendStartMessages: bookends?.start ?? [],
         match: {
           messageId: hit.id,
           role: hit.role,
-          snippet: hit.snippet?.trim() || compactSnippet(contentText(hit), query),
+          snippet: hit.snippet?.trim() || compactSnippet(hit.searchable_text, query),
         },
         rank: hit.rank,
       });
@@ -758,7 +817,57 @@ export class SessionRepository {
       return null;
     }
 
-    return this.toWindowResult(input.sessionId, rows);
+    return this.toWindowResult(input.sessionId, rows, input.aroundMessageId);
+  }
+
+  async getSessionBookends(input: {
+    bookend?: number;
+    sessionId: string;
+    userId: string;
+  }): Promise<{ end: SessionSearchMessage[]; start: SessionSearchMessage[] } | null> {
+    await ready();
+    const db = getSql();
+    const bookend = Math.max(1, Math.min(input.bookend ?? 3, 20));
+    const rows = await db<StoredMessageWithSessionRow[]>`
+      with ordered as (
+        select
+          m.id,
+          m.role,
+          m.content_json,
+          m.tool_call_id,
+          m.tool_name,
+          m.created_at,
+          s.title as session_title,
+          s.created_at as session_created_at,
+          s.updated_at as session_updated_at,
+          row_number() over (order by m.created_at, m.id)::int as rn,
+          count(*) over ()::int as total_messages
+        from messages m
+        join sessions s on s.id = m.session_id
+        where m.session_id = ${input.sessionId}
+          and s.user_id = ${input.userId}
+          and s.environment = ${serverEnv.APP_ENV}
+          and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
+      )
+      select *
+      from ordered
+      where rn <= ${bookend}
+        or rn > total_messages - ${bookend}
+      order by rn
+    `;
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    return {
+      end: rows
+        .filter((row) => Number(row.rn) > Number(row.total_messages) - bookend)
+        .map((row) => toSearchMessage(row)),
+      start: rows
+        .filter((row) => Number(row.rn) <= bookend)
+        .map((row) => toSearchMessage(row)),
+    };
   }
 
   async readSessionWindow(input: {
@@ -809,6 +918,7 @@ export class SessionRepository {
   private toWindowResult(
     sessionId: string,
     rows: StoredMessageWithSessionRow[],
+    anchorId?: string,
   ): SessionWindowResult {
     const first = rows[0];
     const last = rows[rows.length - 1];
@@ -819,7 +929,7 @@ export class SessionRepository {
     return {
       bookendEnd: lastIndex >= totalMessages,
       bookendStart: firstIndex <= 1,
-      messages: rows.map(toSearchMessage),
+      messages: rows.map((row) => toSearchMessage(row, anchorId)),
       messagesAfter: Math.max(0, totalMessages - lastIndex),
       messagesBefore: Math.max(0, firstIndex - 1),
       session: {

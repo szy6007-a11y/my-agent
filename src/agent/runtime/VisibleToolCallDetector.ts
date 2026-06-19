@@ -27,17 +27,20 @@ function firstCapture(match: RegExpExecArray | null): string | null {
 export class VisibleToolCallDetector {
   private readonly genericPatterns: RegExp[];
   private readonly maxBufferChars: number;
-  private readonly visibleToolNamePattern: RegExp | null;
+  private readonly structuredToolPatterns: RegExp[];
   private buffer = "";
 
   constructor(toolNames: readonly string[], maxBufferChars = 512) {
     const names = [...new Set(toolNames)].filter(Boolean);
     this.maxBufferChars = maxBufferChars;
     const alternatives = names.map(escapeRegExp).join("|");
-    this.visibleToolNamePattern =
+    this.structuredToolPatterns =
       names.length > 0 ?
-        new RegExp(`(?:^|[^A-Za-z0-9_.$-])(${alternatives})(?![A-Za-z0-9_-])`)
-      : null;
+        [
+          new RegExp(`(?:^|[^A-Za-z0-9_.$-])(${alternatives})\\s*\\(`),
+          new RegExp(`<\\s*/?\\s*(${alternatives})(?=[\\s>/])`, "i"),
+        ]
+      : [];
     this.genericPatterns = [
       /<[^>\n]*\binvoke\s+name=["']([^"']+)["'][^>]*>/i,
       /["']tool_type["']\s*:\s*["']([^"']+)["']/i,
@@ -53,12 +56,14 @@ export class VisibleToolCallDetector {
 
     this.buffer += chunk;
 
-    const visibleToolName = firstCapture(this.visibleToolNamePattern?.exec(this.buffer) ?? null);
-    if (visibleToolName) {
-      return {
-        reason: VISIBLE_TOOL_CALL_VIOLATION_REASON,
-        toolName: visibleToolName,
-      };
+    for (const pattern of this.structuredToolPatterns) {
+      const toolName = firstCapture(pattern.exec(this.buffer));
+      if (toolName) {
+        return {
+          reason: VISIBLE_TOOL_CALL_VIOLATION_REASON,
+          toolName,
+        };
+      }
     }
 
     for (const pattern of this.genericPatterns) {

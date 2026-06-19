@@ -63,13 +63,11 @@ test("VisibleToolCallDetector detects DeepSeek DSML invoke syntax across chunks"
   });
 });
 
-test("VisibleToolCallDetector detects bare active tool-name text", () => {
+test("VisibleToolCallDetector ignores ordinary tool-name text", () => {
   const detector = new VisibleToolCallDetector(TOOL_NAMES);
 
-  assert.deepEqual(detector.push("请调用 write_file_chunk 继续写入。"), {
-    reason: "visible_tool_call",
-    toolName: "write_file_chunk",
-  });
+  assert.equal(detector.push("根因是系统提示词没有约束 web_search 的触发。"), null);
+  assert.equal(detector.push("请调用 write_file_chunk 继续写入。"), null);
 });
 
 test("VisibleToolCallDetector ignores longer names and ordinary HTML", () => {

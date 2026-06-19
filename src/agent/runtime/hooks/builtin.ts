@@ -23,7 +23,7 @@ export function registerBuiltinHooks(registry: AgentHookRegistry): void {
 
   registry.register("pre_model_call", "output_protocol_reminder", () => ({
     reminders: [
-      "输出内容必须严格遵循内部输出协议：需要工具时先走原生 tool call，工具完成后再输出给用户看的中文正文；不要向用户提及内部标签、协议名、系统提醒、工具名文本或参数 JSON。",
+      "输出内容必须严格遵循内部输出协议：需要工具时先走原生 tool call，工具完成后再输出给用户看的中文正文；不要向用户提及内部标签、协议名、系统提醒，且不要把工具名和参数 JSON 写成伪工具调用文本。用户明确询问工具、实现或调试时，可以用自然语言提及工具名。",
     ],
   }));
 
