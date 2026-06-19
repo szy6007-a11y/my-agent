@@ -77,6 +77,42 @@ function toToolCalls(parts: Map<number, ToolCallAccumulator>): ModelToolCall[] {
     .filter((toolCall) => toolCall.name.length > 0);
 }
 
+function toolCallArgumentChars(parts: Map<number, ToolCallAccumulator>): number {
+  let total = 0;
+  for (const part of parts.values()) {
+    total += part.arguments.length;
+  }
+  return total;
+}
+
+function normalizeDeepSeekStreamError(input: {
+  error: unknown;
+  reportedToolCallStart: boolean;
+  toolCallParts: Map<number, ToolCallAccumulator>;
+}): Error {
+  if (input.error instanceof Error && input.error.name === "AbortError") {
+    return input.error;
+  }
+
+  const message =
+    input.error instanceof Error ? input.error.message
+    : typeof input.error === "string" ? input.error
+    : "DeepSeek streaming response failed";
+
+  if (/terminated/i.test(message)) {
+    const partialChars = toolCallArgumentChars(input.toolCallParts);
+    const toolContext =
+      input.reportedToolCallStart ?
+        `，当时模型已经开始生成工具调用参数（已接收约 ${partialChars} 个字符）`
+      : "";
+    return new Error(
+      `DeepSeek 流式响应在完成前中断${toolContext}。这通常是上游连接断开；如果正在生成 HTML/PPT 等文件，常见原因是单次工具参数过长。请重试，或减少页数/内容后再生成。`,
+    );
+  }
+
+  return input.error instanceof Error ? input.error : new Error(message);
+}
+
 export class DeepSeekProviderAdapter implements ProviderAdapter {
   async *stream(input: ModelStreamInput): AsyncGenerator<ModelStreamEvent> {
     const completionParams: DeepSeekStreamingParams = {
@@ -108,47 +144,55 @@ export class DeepSeekProviderAdapter implements ProviderAdapter {
       userId: input.userId,
     });
 
-    const stream = await deepseek.chat.completions.create(completionParams, {
-      signal: input.signal,
-    });
-
     const toolCallParts = new Map<number, ToolCallAccumulator>();
     let reportedToolCallStart = false;
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta as DeepSeekDelta | undefined;
+    try {
+      const stream = await deepseek.chat.completions.create(completionParams, {
+        signal: input.signal,
+      });
 
-      if (delta?.reasoning_content) {
-        yield { type: "reasoning_delta", text: delta.reasoning_content };
-      }
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta as DeepSeekDelta | undefined;
 
-      if (delta?.content) {
-        yield { type: "text_delta", text: delta.content };
-      }
+        if (delta?.reasoning_content) {
+          yield { type: "reasoning_delta", text: delta.reasoning_content };
+        }
 
-      const partialToolCalls = delta?.tool_calls ?? [];
-      if (partialToolCalls.length > 0 && !reportedToolCallStart) {
-        reportedToolCallStart = true;
-        yield { type: "tool_call_started" };
-      }
+        if (delta?.content) {
+          yield { type: "text_delta", text: delta.content };
+        }
 
-      for (const partial of partialToolCalls) {
-        const index = partial.index ?? toolCallParts.size;
-        const current = toolCallParts.get(index) ?? { arguments: "" };
-        current.id = partial.id ?? current.id;
-        current.name = partial.function?.name ?? current.name;
-        current.arguments += partial.function?.arguments ?? "";
-        toolCallParts.set(index, current);
-      }
+        const partialToolCalls = delta?.tool_calls ?? [];
+        if (partialToolCalls.length > 0 && !reportedToolCallStart) {
+          reportedToolCallStart = true;
+          yield { type: "tool_call_started" };
+        }
 
-      if (chunk.usage) {
-        yield {
-          type: "usage",
-          inputTokens: chunk.usage.prompt_tokens,
-          outputTokens: chunk.usage.completion_tokens,
-          totalTokens: chunk.usage.total_tokens,
-        };
+        for (const partial of partialToolCalls) {
+          const index = partial.index ?? toolCallParts.size;
+          const current = toolCallParts.get(index) ?? { arguments: "" };
+          current.id = partial.id ?? current.id;
+          current.name = partial.function?.name ?? current.name;
+          current.arguments += partial.function?.arguments ?? "";
+          toolCallParts.set(index, current);
+        }
+
+        if (chunk.usage) {
+          yield {
+            type: "usage",
+            inputTokens: chunk.usage.prompt_tokens,
+            outputTokens: chunk.usage.completion_tokens,
+            totalTokens: chunk.usage.total_tokens,
+          };
+        }
       }
+    } catch (error) {
+      throw normalizeDeepSeekStreamError({
+        error,
+        reportedToolCallStart,
+        toolCallParts,
+      });
     }
 
     const toolCalls = toToolCalls(toolCallParts);

@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 
 const requestSchema = z.object({
   agentId: z.string().optional(),
-  maxTokens: z.number().int().min(1).max(4096).optional(),
+  maxTokens: z.number().int().min(1).max(8192).optional(),
   message: z.string().min(1),
   model: z.string().optional(),
   permissionMode: z

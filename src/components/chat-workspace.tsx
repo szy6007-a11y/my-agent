@@ -715,7 +715,7 @@ export function ChatWorkspace() {
       }
 
       appendConsoleLog({
-        id: `status-${payload.sequence}`,
+        id: `status-${payload.sequence}-${payload.at}`,
         at: payload.at,
         level: payload.level,
         source: payload.source,
@@ -906,7 +906,7 @@ export function ChatWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          maxTokens: 4096,
+          maxTokens: 8192,
           message: prompt,
           ...(sessionId ? { sessionId } : {}),
         }),
