@@ -39,6 +39,9 @@ const serverEnvSchema = z.object({
   MEMORY_REVIEW_INTERVAL: z.coerce.number().int().min(0).default(10),
   REDIS_URL: z.string().min(1).optional(),
   SKILL_GITHUB_TOKEN: optionalEnv(z.string().min(1)),
+  SKILL_MAX_TOTAL_BYTES: optionalEnv(
+    z.coerce.number().int().min(1024 * 1024).max(50 * 1024 * 1024),
+  ),
   SKILL_STORAGE_DIR: optionalEnv(z.string().min(1)),
   USER_MEMORY_CHAR_LIMIT: z.coerce.number().int().positive().optional(),
   WEB_ALLOW_PRIVATE_URLS: optionalEnv(z.enum(["true", "false"])),

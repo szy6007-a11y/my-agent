@@ -7,9 +7,11 @@ import {
   type SkillBundle,
   type SkillBundleFile,
 } from "@/agent/skills/SkillManifest";
+import { serverEnv } from "@/lib/env";
 
 export const MAX_SKILL_FILES = 200;
-export const MAX_SKILL_TOTAL_BYTES = 2 * 1024 * 1024;
+export const DEFAULT_MAX_SKILL_TOTAL_BYTES = 8 * 1024 * 1024;
+export const MAX_SKILL_TOTAL_BYTES = serverEnv.SKILL_MAX_TOTAL_BYTES ?? DEFAULT_MAX_SKILL_TOTAL_BYTES;
 export const MAX_SKILL_FILE_BYTES = 1024 * 1024;
 export const MAX_SKILL_MD_BYTES = 256 * 1024;
 

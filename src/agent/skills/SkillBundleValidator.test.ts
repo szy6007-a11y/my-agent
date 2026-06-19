@@ -3,10 +3,20 @@ import test from "node:test";
 
 process.env.DEEPSEEK_API_KEY ??= "test-deepseek-key";
 
+function skillBundle(files: Array<{ content: Buffer; path: string }>) {
+  return {
+    files,
+    identifier: "owner/repo/skill@abc123",
+    metadata: {},
+    source: "github" as const,
+    trustLevel: "community" as const,
+  };
+}
+
 test("validateSkillBundle accepts a valid skill bundle and parses manifest fields", async () => {
   const { validateSkillBundle } = await import("@/agent/skills/SkillBundleValidator");
-  const result = validateSkillBundle({
-    files: [
+  const result = validateSkillBundle(
+    skillBundle([
       {
         content: Buffer.from(
           [
@@ -26,12 +36,8 @@ test("validateSkillBundle accepts a valid skill bundle and parses manifest field
         content: Buffer.from("Reference text"),
         path: "references/style.md",
       },
-    ],
-    identifier: "owner/repo/one-three-one@abc123",
-    metadata: {},
-    source: "github",
-    trustLevel: "community",
-  });
+    ]),
+  );
 
   assert.equal(result.ok, true);
   if (!result.ok) return;
@@ -46,8 +52,8 @@ test("validateSkillBundle accepts a valid skill bundle and parses manifest field
 
 test("validateSkillBundle rejects traversal paths", async () => {
   const { validateSkillBundle } = await import("@/agent/skills/SkillBundleValidator");
-  const result = validateSkillBundle({
-    files: [
+  const result = validateSkillBundle(
+    skillBundle([
       {
         content: Buffer.from("---\nname: bad\n---\n"),
         path: "SKILL.md",
@@ -56,12 +62,8 @@ test("validateSkillBundle rejects traversal paths", async () => {
         content: Buffer.from("nope"),
         path: "../outside.txt",
       },
-    ],
-    identifier: "bad",
-    metadata: {},
-    source: "github",
-    trustLevel: "community",
-  });
+    ]),
+  );
 
   assert.equal(result.ok, false);
   if (result.ok) return;
@@ -70,20 +72,64 @@ test("validateSkillBundle rejects traversal paths", async () => {
 
 test("validateSkillBundle requires SKILL.md at selected root", async () => {
   const { validateSkillBundle } = await import("@/agent/skills/SkillBundleValidator");
-  const result = validateSkillBundle({
-    files: [
+  const result = validateSkillBundle(
+    skillBundle([
       {
         content: Buffer.from("nested"),
         path: "nested/SKILL.md",
       },
-    ],
-    identifier: "missing-root",
-    metadata: {},
-    source: "github",
-    trustLevel: "community",
-  });
+    ]),
+  );
 
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.match(result.error, /must contain SKILL\.md/);
+});
+
+test("validateSkillBundle accepts asset-heavy skills below the production total limit", async () => {
+  const { validateSkillBundle } = await import("@/agent/skills/SkillBundleValidator");
+  const result = validateSkillBundle(
+    skillBundle([
+      {
+        content: Buffer.from("---\nname: ppt-skill\n---\nUse local image assets.\n"),
+        path: "SKILL.md",
+      },
+      {
+        content: Buffer.alloc(900 * 1024, "a"),
+        path: "assets/background-a.webp",
+      },
+      {
+        content: Buffer.alloc(900 * 1024, "b"),
+        path: "assets/background-b.webp",
+      },
+      {
+        content: Buffer.alloc(400 * 1024, "c"),
+        path: "assets/background-c.webp",
+      },
+    ]),
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test("validateSkillBundle rejects bundles above the production total limit", async () => {
+  const { MAX_SKILL_TOTAL_BYTES, validateSkillBundle } = await import(
+    "@/agent/skills/SkillBundleValidator"
+  );
+  const result = validateSkillBundle(
+    skillBundle([
+      {
+        content: Buffer.from("---\nname: too-large\n---\n"),
+        path: "SKILL.md",
+      },
+      ...Array.from({ length: Math.ceil(MAX_SKILL_TOTAL_BYTES / (900 * 1024)) + 1 }, (_, index) => ({
+        content: Buffer.alloc(900 * 1024, "a"),
+        path: `assets/large-${index}.webp`,
+      })),
+    ]),
+  );
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.error, /Skill bundle is .* limit is/);
 });
