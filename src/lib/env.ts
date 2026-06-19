@@ -56,6 +56,7 @@ const serverEnvSchema = z.object({
   EXA_API_KEY: optionalEnv(z.string().min(1)),
   FIRECRAWL_API_KEY: optionalEnv(z.string().min(1)),
   FIRECRAWL_API_URL: optionalEnv(z.url()),
+  GITHUB_TOKEN: optionalEnv(z.string().min(1)),
   PARALLEL_API_KEY: optionalEnv(z.string().min(1)),
   SEARXNG_URL: optionalEnv(z.url()),
   TAVILY_API_KEY: optionalEnv(z.string().min(1)),

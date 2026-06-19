@@ -50,13 +50,34 @@ type GithubBlob = {
 };
 
 function githubHeaders(): HeadersInit {
+  const token = serverEnv.SKILL_GITHUB_TOKEN ?? serverEnv.GITHUB_TOKEN;
   return {
     Accept: "application/vnd.github+json",
     "User-Agent": "my-agent-skill-installer",
-    ...(serverEnv.SKILL_GITHUB_TOKEN ?
-      { Authorization: `Bearer ${serverEnv.SKILL_GITHUB_TOKEN}` }
-    : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+function githubRateLimitMessage(response: Response, body: string): string | null {
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  if (response.status !== 403 || remaining !== "0") {
+    return null;
+  }
+
+  const resetSeconds = Number(response.headers.get("x-ratelimit-reset"));
+  const resetAt =
+    Number.isFinite(resetSeconds) && resetSeconds > 0 ?
+      new Date(resetSeconds * 1000).toISOString()
+    : null;
+
+  return [
+    "GitHub API rate limit exhausted for the current server egress IP.",
+    "Configure SKILL_GITHUB_TOKEN or GITHUB_TOKEN on the server to use authenticated GitHub API quota.",
+    resetAt ? `Unauthenticated quota resets around ${resetAt}.` : "",
+    body ? `GitHub response: ${body.slice(0, 240)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function normalizeRepoInput(input: string): URL {
@@ -114,6 +135,10 @@ async function githubJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
+    const rateLimitMessage = githubRateLimitMessage(response, body);
+    if (rateLimitMessage) {
+      throw new Error(rateLimitMessage);
+    }
     throw new Error(`GitHub API ${response.status}: ${body.slice(0, 240) || response.statusText}`);
   }
 
