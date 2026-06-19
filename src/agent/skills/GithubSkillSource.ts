@@ -4,7 +4,8 @@ import type { SkillBundle, SkillBundleFile } from "@/agent/skills/SkillManifest"
 import { serverEnv } from "@/lib/env";
 
 const GITHUB_API_URL = "https://api.github.com";
-const MAX_GITHUB_TREE_ENTRIES = 1_000;
+const MAX_REPO_DISCOVERY_DIRECTORIES = 300;
+const MAX_REPO_DISCOVERY_ENTRIES = 3_000;
 
 export type GithubSkillLocation = {
   commitSha: string;
@@ -14,6 +15,22 @@ export type GithubSkillLocation = {
   repo: string;
   sourceUrl: string;
 };
+
+export type GithubSkillCandidate = {
+  path: string;
+  skillFilePath: string;
+  sourceUrl: string;
+};
+
+export class GithubSkillSelectionRequiredError extends Error {
+  constructor(
+    message: string,
+    readonly candidates: GithubSkillCandidate[],
+  ) {
+    super(message);
+    this.name = "GithubSkillSelectionRequiredError";
+  }
+}
 
 type GithubRepo = {
   default_branch?: string;
@@ -42,11 +59,6 @@ type GithubContentItem = {
   path?: string;
   size?: number;
   type?: "file" | "dir" | "symlink" | "submodule";
-};
-
-type GithubBlob = {
-  content?: string;
-  encoding?: string;
 };
 
 function githubHeaders(): HeadersInit {
@@ -233,31 +245,111 @@ function relativeUnderRoot(path: string, root: string): string | null {
   return path.slice(root.length + 1);
 }
 
-function chooseSkillRoot(paths: string[], requestedPath: string): string {
-  const normalizedRequestedPath = normalizeSelectedPath(requestedPath);
-  const directSkill = normalizedRequestedPath ?
-    `${normalizedRequestedPath}/SKILL.md`
-  : "SKILL.md";
-  if (paths.includes(directSkill)) {
-    return normalizedRequestedPath;
-  }
-  if (normalizedRequestedPath.endsWith("/SKILL.md") && paths.includes(normalizedRequestedPath)) {
-    return dirname(normalizedRequestedPath);
-  }
-  if (normalizedRequestedPath === "SKILL.md" && paths.includes("SKILL.md")) {
-    return "";
+function skillCandidatesFromPaths(
+  paths: string[],
+  location: GithubSkillLocation,
+): GithubSkillCandidate[] {
+  return [
+    ...new Map(
+      paths
+        .filter((path) => path === "SKILL.md" || path.endsWith("/SKILL.md"))
+        .map((skillFilePath) => {
+          const path = skillFilePath === "SKILL.md" ? "" : dirname(skillFilePath);
+          return [
+            path,
+            {
+              path,
+              skillFilePath,
+              sourceUrl: `https://github.com/${location.owner}/${location.repo}/tree/${location.commitSha}${
+                path ? `/${path}` : ""
+              }`,
+            },
+          ] as const;
+        }),
+    ).values(),
+  ].sort((left, right) => {
+    if (left.path === "") return -1;
+    if (right.path === "") return 1;
+    return left.path.localeCompare(right.path);
+  });
+}
+
+async function discoverSkillCandidatesByContents(
+  location: GithubSkillLocation,
+  signal?: AbortSignal,
+): Promise<GithubSkillCandidate[]> {
+  const queue = [""];
+  const skillPaths: string[] = [];
+  let visitedDirectories = 0;
+  let seenEntries = 0;
+
+  while (queue.length > 0) {
+    const path = queue.shift() ?? "";
+    visitedDirectories += 1;
+    if (visitedDirectories > MAX_REPO_DISCOVERY_DIRECTORIES) {
+      throw new Error(
+        `Repository discovery exceeded ${MAX_REPO_DISCOVERY_DIRECTORIES} directories; provide a skill path.`,
+      );
+    }
+
+    const suffix = path ? `/${apiPath(path)}` : "";
+    const content = await githubJson<GithubContentItem | GithubContentItem[]>(
+      `/repos/${apiPath(location.owner)}/${apiPath(location.repo)}/contents${suffix}?ref=${apiPath(
+        location.commitSha,
+      )}`,
+      signal,
+    );
+    const items = Array.isArray(content) ? content : [content];
+    seenEntries += items.length;
+    if (seenEntries > MAX_REPO_DISCOVERY_ENTRIES) {
+      throw new Error(
+        `Repository discovery exceeded ${MAX_REPO_DISCOVERY_ENTRIES} entries; provide a skill path.`,
+      );
+    }
+
+    for (const item of items) {
+      if (!item.path || !item.type) {
+        continue;
+      }
+      if (item.type === "file" && basename(item.path) === "SKILL.md") {
+        skillPaths.push(item.path);
+      }
+      if (item.type === "dir") {
+        queue.push(item.path);
+      }
+    }
   }
 
-  const candidates = paths.filter((path) => path.endsWith("/SKILL.md") || path === "SKILL.md");
-  if (!normalizedRequestedPath && candidates.length === 1) {
-    return candidates[0] === "SKILL.md" ? "" : dirname(candidates[0]);
+  return skillCandidatesFromPaths(skillPaths, location);
+}
+
+async function discoverSkillCandidates(
+  location: GithubSkillLocation,
+  signal?: AbortSignal,
+): Promise<GithubSkillCandidate[]> {
+  try {
+    const tree = await githubJson<GithubTree>(
+      `/repos/${apiPath(location.owner)}/${apiPath(location.repo)}/git/trees/${apiPath(
+        location.commitSha,
+      )}?recursive=1`,
+      signal,
+    );
+    const entries = tree.tree ?? [];
+    const candidates = skillCandidatesFromPaths(
+      entries
+        .map((entry) => entry.path)
+        .filter((path): path is string => Boolean(path)),
+      location,
+    );
+    if (!tree.truncated || candidates.length > 0) {
+      return candidates;
+    }
+  } catch {
+    // Fall through to Contents API discovery, which is slower but works for repos
+    // where recursive tree retrieval is truncated or unavailable.
   }
 
-  throw new Error(
-    normalizedRequestedPath ?
-      `No SKILL.md found at GitHub path '${normalizedRequestedPath}'.`
-    : "Repository must contain exactly one SKILL.md when no path is provided.",
-  );
+  return discoverSkillCandidatesByContents(location, signal);
 }
 
 export class GithubSkillSource {
@@ -293,63 +385,26 @@ export class GithubSkillSource {
       return this.fetchContentsBundle(location, signal);
     }
 
-    const tree = await githubJson<GithubTree>(
-      `/repos/${apiPath(location.owner)}/${apiPath(location.repo)}/git/trees/${apiPath(
-        location.commitSha,
-      )}?recursive=1`,
-      signal,
-    );
-    const entries = tree.tree ?? [];
-    if (tree.truncated || entries.length > MAX_GITHUB_TREE_ENTRIES) {
-      throw new Error("GitHub tree is too large or truncated; select a narrower skill path.");
+    const candidates = await discoverSkillCandidates(location, signal);
+    if (candidates.length === 0) {
+      throw new Error("Repository does not contain any SKILL.md files.");
     }
-
-    const paths = entries
-      .map((entry) => entry.path)
-      .filter((path): path is string => Boolean(path));
-    const skillRoot = chooseSkillRoot(paths, location.path);
-    const filesToFetch = entries
-      .filter((entry) => entry.type === "blob" && entry.path && entry.sha)
-      .map((entry) => {
-        const relativePath = relativeUnderRoot(entry.path ?? "", skillRoot);
-        return relativePath ? { ...entry, relativePath } : null;
-      })
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-
-    const files: SkillBundleFile[] = [];
-    for (const file of filesToFetch) {
-      if (file.mode === "120000") {
-        throw new Error(`GitHub skill contains symlink '${file.relativePath}', which is not allowed.`);
-      }
-      const blob = await githubJson<GithubBlob>(
-        `/repos/${apiPath(location.owner)}/${apiPath(location.repo)}/git/blobs/${apiPath(
-          file.sha ?? "",
-        )}`,
+    if (candidates[0]?.path === "" || candidates.length === 1) {
+      const selected = candidates[0];
+      return this.fetchContentsBundle(
+        {
+          ...location,
+          path: selected.path,
+          sourceUrl: selected.sourceUrl,
+        },
         signal,
       );
-      if (blob.encoding !== "base64" || !blob.content) {
-        throw new Error(`GitHub blob '${file.relativePath}' is not base64 encoded.`);
-      }
-      files.push({
-        content: Buffer.from(blob.content.replace(/\s+/g, ""), "base64"),
-        path: file.relativePath,
-      });
     }
 
-    return {
-      files,
-      identifier: `${location.owner}/${location.repo}/${skillRoot || "."}@${location.commitSha}`,
-      metadata: {
-        commitSha: location.commitSha,
-        owner: location.owner,
-        path: skillRoot,
-        ref: location.ref,
-        repo: location.repo,
-        sourceUrl: location.sourceUrl,
-      },
-      source: "github",
-      trustLevel: "community",
-    };
+    throw new GithubSkillSelectionRequiredError(
+      "Repository contains multiple skills. Choose one candidate path and call install_github_skill again with its sourceUrl.",
+      candidates,
+    );
   }
 
   private async fetchContentsBundle(

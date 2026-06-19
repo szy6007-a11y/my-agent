@@ -1,3 +1,4 @@
+import { GithubSkillSelectionRequiredError } from "@/agent/skills/GithubSkillSource";
 import { skillInstaller } from "@/agent/skills/SkillInstaller";
 import { skillRepository } from "@/agent/skills/SkillRepository";
 import { skillRuntime } from "@/agent/skills/SkillRuntime";
@@ -83,12 +84,25 @@ export function createSkillTools(): AgentTool[] {
         return toolError("source is required.");
       }
 
-      const proposal = await skillInstaller.proposeGithubInstall({
-        runId: context.runId,
-        signal: context.signal,
-        source,
-        userId: context.userId,
-      });
+      let proposal;
+      try {
+        proposal = await skillInstaller.proposeGithubInstall({
+          runId: context.runId,
+          signal: context.signal,
+          source,
+          userId: context.userId,
+        });
+      } catch (error) {
+        if (error instanceof GithubSkillSelectionRequiredError) {
+          return toolSuccess({
+            candidates: error.candidates,
+            next_action:
+              "Choose the skill that matches the user request and call install_github_skill again with that candidate sourceUrl. If no candidate is clearly intended, ask the user which skill to install.",
+            status: "selection_required",
+          });
+        }
+        throw error;
+      }
 
       return toolSuccess({
         next_action:
