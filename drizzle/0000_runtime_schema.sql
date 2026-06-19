@@ -138,6 +138,23 @@ create table if not exists run_events (
   created_at timestamptz not null default now()
 );
 --> statement-breakpoint
+create table if not exists tool_approvals (
+  id text primary key,
+  environment text not null,
+  run_id text not null references agent_runs(id) on delete cascade,
+  session_id text not null references sessions(id) on delete cascade,
+  user_id text not null,
+  tool_call_id text not null,
+  tool_name text not null,
+  risk text not null,
+  status text not null default 'pending',
+  reason text not null,
+  request_json jsonb not null,
+  decision_json jsonb,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+--> statement-breakpoint
 create index if not exists messages_session_created_idx
 on messages(session_id, created_at);
 --> statement-breakpoint
@@ -154,3 +171,9 @@ on sessions(environment, user_id, updated_at desc);
 --> statement-breakpoint
 create index if not exists agent_runs_environment_session_created_idx
 on agent_runs(environment, session_id, created_at desc);
+--> statement-breakpoint
+create index if not exists tool_approvals_environment_user_status_idx
+on tool_approvals(environment, user_id, status, created_at desc);
+--> statement-breakpoint
+create index if not exists tool_approvals_run_created_idx
+on tool_approvals(run_id, created_at);

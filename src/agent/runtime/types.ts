@@ -11,6 +11,7 @@ export type {
   ModelToolDefinition,
   PermissionMode,
   RunStatus,
+  ToolApprovalStatus,
   ToolRisk,
   ToolUiManifest,
 } from "@/shared/agent-protocol";

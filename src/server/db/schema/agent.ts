@@ -93,3 +93,36 @@ export const runEvents = pgTable(
   },
   (table) => [index("run_events_run_created_idx").on(table.runId, table.createdAt)],
 );
+
+export const toolApprovals = pgTable(
+  "tool_approvals",
+  {
+    id: text("id").primaryKey(),
+    environment: text("environment").notNull(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    toolCallId: text("tool_call_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    risk: text("risk").notNull(),
+    status: text("status").notNull().default("pending"),
+    reason: text("reason").notNull(),
+    requestJson: jsonb("request_json").notNull(),
+    decisionJson: jsonb("decision_json"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("tool_approvals_environment_user_status_idx").on(
+      table.environment,
+      table.userId,
+      table.status,
+      table.createdAt.desc(),
+    ),
+    index("tool_approvals_run_created_idx").on(table.runId, table.createdAt),
+  ],
+);

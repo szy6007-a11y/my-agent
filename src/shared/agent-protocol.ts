@@ -47,6 +47,8 @@ export type RunStatus =
 
 export type ToolRisk = "read" | "write" | "external" | "destructive";
 
+export type ToolApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
 export type ToolUiManifest = {
   description?: string;
   displayName: string;
@@ -112,6 +114,15 @@ export type AgentEvent =
       confirmationId: string;
       message: string;
       runId: string;
+      toolCallId: string;
+      toolName: string;
+    }
+  | {
+      type: "tool.approval.resolved";
+      approvalId: string;
+      approved: boolean;
+      runId: string;
+      status: ToolApprovalStatus;
       toolCallId: string;
       toolName: string;
     }

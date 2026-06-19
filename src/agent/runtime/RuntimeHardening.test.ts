@@ -13,6 +13,7 @@ import type {
   RunStatus,
 } from "@/agent/runtime/types";
 import type { SessionRepository } from "@/agent/sessions/SessionRepository";
+import type { AgentTool } from "@/agent/tools/types";
 
 process.env.DEEPSEEK_API_KEY ??= "test-deepseek-key";
 
@@ -44,8 +45,21 @@ class NoopBackgroundReview {
 
 class FakeSessionRepository {
   readonly messages: AgentMessage[];
+  readonly approvals: Array<{
+    id: string;
+    reason: string;
+    request: unknown;
+    risk: "read" | "write" | "external" | "destructive";
+    runId: string;
+    sessionId: string;
+    status: "pending" | "approved" | "rejected" | "expired";
+    toolCallId: string;
+    toolName: string;
+    userId: string;
+  }> = [];
   readonly statuses: RunStatus[] = [];
   readonly updatedMessages: Array<{ content: string; messageId: string }> = [];
+  approvalDecision: "approved" | "rejected" | "expired" = "approved";
   promptSnapshot: PromptAssembly | null = makePrompt("static prompt");
 
   constructor(messages: AgentMessage[] = []) {
@@ -96,6 +110,52 @@ class FakeSessionRepository {
     this.messages.push(message);
     return { id: message.id };
   }
+
+  async createToolApproval(input: {
+    reason: string;
+    request: unknown;
+    risk: "read" | "write" | "external" | "destructive";
+    runId: string;
+    sessionId: string;
+    toolCallId: string;
+    toolName: string;
+    userId: string;
+  }) {
+    const approval = {
+      id: `approval_${this.approvals.length + 1}`,
+      reason: input.reason,
+      request: input.request,
+      risk: input.risk,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      status: "pending" as const,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      userId: input.userId,
+    };
+    this.approvals.push(approval);
+    return {
+      ...approval,
+      createdAt: new Date(0).toISOString(),
+      decision: null,
+      resolvedAt: null,
+    };
+  }
+
+  async waitForToolApproval(input: { approvalId: string }) {
+    const approval = this.approvals.find((item) => item.id === input.approvalId);
+    if (!approval) {
+      throw new Error("approval not found");
+    }
+
+    approval.status = this.approvalDecision;
+    return {
+      ...approval,
+      createdAt: new Date(0).toISOString(),
+      decision: { decision: this.approvalDecision },
+      resolvedAt: new Date(1).toISOString(),
+    };
+  }
 }
 
 class FinalTextModelRouter {
@@ -121,7 +181,7 @@ class VisibleToolThenFinalModelRouter {
   }
 }
 
-class MemoryToolCallModelRouter {
+class FakeWriteToolCallModelRouter {
   readonly payloads: ModelMessage[][] = [];
 
   async *stream(input: ModelStreamInput) {
@@ -131,22 +191,41 @@ class MemoryToolCallModelRouter {
         type: "tool_calls" as const,
         toolCalls: [
           {
-            arguments: JSON.stringify({
-              action: "add",
-              content: "User prefers short answers.",
-              target: "user",
-            }),
-            id: "call_memory",
-            name: "memory",
+            arguments: JSON.stringify({ value: "ok" }),
+            id: "call_write",
+            name: "fake_write",
           },
         ],
       };
       return;
     }
 
-    yield { type: "text_delta" as const, text: "需要确认后才能保存记忆。" };
+    yield { type: "text_delta" as const, text: "写入完成。" };
   }
 }
+
+const fakeWriteTool: AgentTool = {
+  name: "fake_write",
+  definition: {
+    type: "function",
+    function: {
+      name: "fake_write",
+      description: "Test-only write tool.",
+      parameters: {
+        type: "object",
+        properties: {
+          value: { type: "string" },
+        },
+        required: ["value"],
+      },
+    },
+  },
+  isReadOnly: false,
+  risk: "write",
+  async execute(args) {
+    return JSON.stringify({ success: true, args });
+  },
+};
 
 test("PayloadSanitizer repairs missing tool results and invalid arguments", async () => {
   const { sanitizeModelMessages } = await import("@/agent/runtime/PayloadSanitizer");
@@ -260,10 +339,11 @@ test("AgentLoop recovers once when the model writes a visible tool call", async 
   assert.equal(sessions.messages.at(-1)?.content, "已恢复。");
 });
 
-test("AgentLoop emits approval events and blocks write tools without confirmation", async () => {
-  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+test("AgentLoop waits for approval and executes write tools after confirmation", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }] = await Promise.all([
     import("@/agent/context/ContextEngine"),
     import("@/agent/runtime/AgentLoop"),
+    import("@/agent/tools/ToolRegistry"),
   ]);
   const sessions = new FakeSessionRepository([
     {
@@ -273,12 +353,15 @@ test("AgentLoop emits approval events and blocks write tools without confirmatio
       role: "user",
     },
   ]);
-  const modelRouter = new MemoryToolCallModelRouter();
+  const modelRouter = new FakeWriteToolCallModelRouter();
   const loop = new AgentLoop(
     new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
     modelRouter as unknown as ModelRouter,
     sessions as unknown as SessionRepository,
     new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([fakeWriteTool]),
   );
 
   const events = await drain(
@@ -297,10 +380,92 @@ test("AgentLoop emits approval events and blocks write tools without confirmatio
 
   assert.equal(events.some((event) => event.type === "tool.approval.required"), true);
   assert.equal(events.some((event) => event.type === "tool.confirmation.required"), true);
+  assert.deepEqual(
+    events.find((event) => event.type === "tool.approval.resolved"),
+    {
+      approvalId: "approval_1",
+      approved: true,
+      runId: "run_approval",
+      status: "approved",
+      toolCallId: "call_write",
+      toolName: "fake_write",
+      type: "tool.approval.resolved",
+    },
+  );
+  assert.equal(events.some((event) => event.type === "tool.completed"), true);
+  assert.equal(events.some((event) => event.type === "tool.failed"), false);
+  assert.match(
+    sessions.messages.find((message) => message.role === "tool")?.content ?? "",
+    /"success":true/,
+  );
+  assert.equal(sessions.messages.at(-1)?.content, "写入完成。");
+});
+
+test("AgentLoop records rejected approvals as tool failures without executing", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+    import("@/agent/tools/ToolRegistry"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "运行写工具",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  sessions.approvalDecision = "rejected";
+  const modelRouter = new FakeWriteToolCallModelRouter();
+  let executed = false;
+  const rejectingTool: AgentTool = {
+    ...fakeWriteTool,
+    async execute() {
+      executed = true;
+      return JSON.stringify({ success: true });
+    },
+  };
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([rejectingTool]),
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      permissionMode: "ask-on-write",
+      runId: "run_rejected_approval",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  assert.equal(executed, false);
+  assert.equal(events.some((event) => event.type === "tool.approval.required"), true);
+  assert.deepEqual(
+    events.find((event) => event.type === "tool.approval.resolved"),
+    {
+      approvalId: "approval_1",
+      approved: false,
+      runId: "run_rejected_approval",
+      status: "rejected",
+      toolCallId: "call_write",
+      toolName: "fake_write",
+      type: "tool.approval.resolved",
+    },
+  );
   assert.equal(events.some((event) => event.type === "tool.failed"), true);
   assert.match(
     sessions.messages.find((message) => message.role === "tool")?.content ?? "",
-    /requiresApproval/,
+    /用户拒绝了工具执行请求/,
   );
-  assert.equal(sessions.messages.at(-1)?.content, "需要确认后才能保存记忆。");
 });

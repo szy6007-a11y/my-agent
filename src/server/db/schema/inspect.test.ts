@@ -17,6 +17,7 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "messages",
     "run_events",
     "sessions",
+    "tool_approvals",
   ]);
 
   assert.deepEqual([...schema.get("sessions") ?? []].sort(), [
@@ -40,5 +41,21 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "tool_call_id",
     "tool_name",
   ]);
-  assert.equal(REQUIRED_DATABASE_INDEXES.length, 9);
+  assert.deepEqual([...schema.get("tool_approvals") ?? []].sort(), [
+    "created_at",
+    "decision_json",
+    "environment",
+    "id",
+    "reason",
+    "request_json",
+    "resolved_at",
+    "risk",
+    "run_id",
+    "session_id",
+    "status",
+    "tool_call_id",
+    "tool_name",
+    "user_id",
+  ]);
+  assert.equal(REQUIRED_DATABASE_INDEXES.length, 11);
 });

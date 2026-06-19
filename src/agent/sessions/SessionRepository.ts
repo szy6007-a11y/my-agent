@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { setTimeout as sleep } from "timers/promises";
 import postgres from "postgres";
 
 import type {
@@ -9,6 +10,8 @@ import type {
   AgentRole,
   ModelToolCall,
   RunStatus,
+  ToolApprovalStatus,
+  ToolRisk,
 } from "@/agent/runtime/types";
 import type { PromptAssembly } from "@/agent/context/PromptAssembler";
 import { CONTEXT_SUMMARY_KIND } from "@/agent/context/ContextSummary";
@@ -60,6 +63,22 @@ type PromptSnapshotRow = {
   prompt_snapshot_json: unknown;
 };
 
+type ToolApprovalRow = {
+  id: string;
+  status: ToolApprovalStatus;
+  run_id: string;
+  session_id: string;
+  user_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  risk: ToolRisk;
+  reason: string;
+  request_json: unknown;
+  decision_json: unknown;
+  created_at: Date;
+  resolved_at: Date | null;
+};
+
 export type StoredChatSession = {
   id: string;
   title: string;
@@ -102,6 +121,27 @@ export type SessionDiscoveryResult = SessionWindowResult & {
   rank: number | null;
 };
 
+export type StoredToolApproval = {
+  id: string;
+  status: ToolApprovalStatus;
+  runId: string;
+  sessionId: string;
+  userId: string;
+  toolCallId: string;
+  toolName: string;
+  risk: ToolRisk;
+  reason: string;
+  request: unknown;
+  decision: unknown;
+  createdAt: string;
+  resolvedAt: string | null;
+};
+
+export type ToolApprovalDecision = Extract<ToolApprovalStatus, "approved" | "rejected">;
+
+const APPROVAL_POLL_INTERVAL_MS = 250;
+const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+
 async function ready() {
   await assertDatabaseMigrated();
 }
@@ -129,6 +169,33 @@ function isPromptAssembly(value: unknown): value is PromptAssembly {
 
 function toPromptAssembly(value: unknown): PromptAssembly | null {
   return isPromptAssembly(value) ? value : null;
+}
+
+function isToolApprovalStatus(value: unknown): value is ToolApprovalStatus {
+  return (
+    value === "pending" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "expired"
+  );
+}
+
+function toToolApproval(row: ToolApprovalRow): StoredToolApproval {
+  return {
+    id: row.id,
+    status: isToolApprovalStatus(row.status) ? row.status : "pending",
+    runId: row.run_id,
+    sessionId: row.session_id,
+    userId: row.user_id,
+    toolCallId: row.tool_call_id,
+    toolName: row.tool_name,
+    risk: row.risk,
+    reason: row.reason,
+    request: row.request_json,
+    decision: row.decision_json,
+    createdAt: row.created_at.toISOString(),
+    resolvedAt: row.resolved_at?.toISOString() ?? null,
+  };
 }
 
 function contentText(row: StoredMessageRow): string {
@@ -702,6 +769,24 @@ export class SessionRepository {
     await ready();
     const db = getSql();
 
+    if (event.type === "tool.approval.resolved") {
+      await db`
+        insert into run_events (run_id, type, payload_json)
+        select id, ${event.type}, ${db.json(toJson(event))}
+        from agent_runs
+        where id = ${runId}
+          and environment = ${serverEnv.APP_ENV}
+          and not exists (
+            select 1
+            from run_events existing
+            where existing.run_id = agent_runs.id
+              and existing.type = ${event.type}
+              and existing.payload_json->>'approvalId' = ${event.approvalId}
+          )
+      `;
+      return;
+    }
+
     await db`
       insert into run_events (run_id, type, payload_json)
       select id, ${event.type}, ${db.json(toJson(event))}
@@ -709,6 +794,223 @@ export class SessionRepository {
       where id = ${runId}
         and environment = ${serverEnv.APP_ENV}
     `;
+  }
+
+  async createToolApproval(input: {
+    reason: string;
+    request: unknown;
+    risk: ToolRisk;
+    runId: string;
+    sessionId: string;
+    toolCallId: string;
+    toolName: string;
+    userId: string;
+  }): Promise<StoredToolApproval> {
+    await ready();
+    const db = getSql();
+    const id = `approval_${randomUUID()}`;
+    const rows = await db<ToolApprovalRow[]>`
+      insert into tool_approvals (
+        id,
+        environment,
+        run_id,
+        session_id,
+        user_id,
+        tool_call_id,
+        tool_name,
+        risk,
+        status,
+        reason,
+        request_json
+      )
+      select
+        ${id},
+        ${serverEnv.APP_ENV},
+        r.id,
+        r.session_id,
+        r.user_id,
+        ${input.toolCallId},
+        ${input.toolName},
+        ${input.risk},
+        'pending',
+        ${input.reason},
+        ${db.json(toJson(input.request))}
+      from agent_runs r
+      where r.id = ${input.runId}
+        and r.session_id = ${input.sessionId}
+        and r.user_id = ${input.userId}
+        and r.environment = ${serverEnv.APP_ENV}
+      returning
+        id,
+        status,
+        run_id,
+        session_id,
+        user_id,
+        tool_call_id,
+        tool_name,
+        risk,
+        reason,
+        request_json,
+        decision_json,
+        created_at,
+        resolved_at
+    `;
+
+    if (!rows[0]) {
+      throw new Error("Run not found or not writable by user");
+    }
+
+    return toToolApproval(rows[0]);
+  }
+
+  async getToolApprovalForUser(input: {
+    approvalId: string;
+    userId: string;
+  }): Promise<StoredToolApproval | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<ToolApprovalRow[]>`
+      select
+        id,
+        status,
+        run_id,
+        session_id,
+        user_id,
+        tool_call_id,
+        tool_name,
+        risk,
+        reason,
+        request_json,
+        decision_json,
+        created_at,
+        resolved_at
+      from tool_approvals
+      where id = ${input.approvalId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      limit 1
+    `;
+
+    return rows[0] ? toToolApproval(rows[0]) : null;
+  }
+
+  async resolveToolApproval(input: {
+    approvalId: string;
+    decision: ToolApprovalDecision;
+    decisionReason?: string;
+    userId: string;
+  }): Promise<StoredToolApproval | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<ToolApprovalRow[]>`
+      update tool_approvals
+      set
+        status = ${input.decision},
+        decision_json = ${db.json(toJson({
+          decision: input.decision,
+          reason: input.decisionReason ?? null,
+          resolvedBy: input.userId,
+        }))},
+        resolved_at = now()
+      where id = ${input.approvalId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+        and status = 'pending'
+      returning
+        id,
+        status,
+        run_id,
+        session_id,
+        user_id,
+        tool_call_id,
+        tool_name,
+        risk,
+        reason,
+        request_json,
+        decision_json,
+        created_at,
+        resolved_at
+    `;
+
+    return rows[0] ? toToolApproval(rows[0]) : null;
+  }
+
+  async waitForToolApproval(input: {
+    approvalId: string;
+    signal: AbortSignal;
+    timeoutMs?: number;
+    userId: string;
+  }): Promise<StoredToolApproval> {
+    const startedAt = Date.now();
+    const timeoutMs = input.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const approval = await this.getToolApprovalForUser({
+        approvalId: input.approvalId,
+        userId: input.userId,
+      });
+
+      if (!approval) {
+        throw new Error("Tool approval not found");
+      }
+
+      if (approval.status !== "pending") {
+        return approval;
+      }
+
+      await sleep(APPROVAL_POLL_INTERVAL_MS, undefined, { signal: input.signal });
+    }
+
+    const db = getSql();
+    const rows = await db<ToolApprovalRow[]>`
+      update tool_approvals
+      set
+        status = 'expired',
+        decision_json = ${db.json(toJson({
+          decision: "expired",
+          reason: "Approval timed out before the user responded.",
+        }))},
+        resolved_at = now()
+      where id = ${input.approvalId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+        and status = 'pending'
+      returning
+        id,
+        status,
+        run_id,
+        session_id,
+        user_id,
+        tool_call_id,
+        tool_name,
+        risk,
+        reason,
+        request_json,
+        decision_json,
+        created_at,
+        resolved_at
+    `;
+
+    return rows[0] ? toToolApproval(rows[0]) : (
+      await this.getToolApprovalForUser({
+        approvalId: input.approvalId,
+        userId: input.userId,
+      })
+    ) ?? {
+      id: input.approvalId,
+      status: "expired",
+      runId: "",
+      sessionId: "",
+      userId: input.userId,
+      toolCallId: "",
+      toolName: "",
+      risk: "write",
+      reason: "Approval timed out before the user responded.",
+      request: {},
+      decision: { decision: "expired" },
+      createdAt: new Date().toISOString(),
+      resolvedAt: new Date().toISOString(),
+    };
   }
 }
 

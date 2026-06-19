@@ -162,6 +162,7 @@ export class AgentLoop {
     private readonly backgroundReview = new BackgroundReviewAgent(modelRouter, sessions),
     private readonly contextCompressor = new ContextCompressor(modelRouter, sessions),
     private readonly hooks: AgentHookRegistry = createDefaultHookRegistry(),
+    private readonly createTools: () => ToolRegistry = () => new ToolRegistry(),
   ) {}
 
   async *execute(input: {
@@ -176,7 +177,7 @@ export class AgentLoop {
     thinking: "enabled" | "disabled";
     signal: AbortSignal;
   }): AsyncGenerator<AgentEvent> {
-    const tools = new ToolRegistry();
+    const tools = this.createTools();
     const permissionMode = input.permissionMode ?? "ask-on-write";
     await this.sessions.updateRunStatus(input.runId, "streaming_model");
     yield { type: "run.started", runId: input.runId };
@@ -590,30 +591,82 @@ export class AgentLoop {
             result = toolError(`工具调用被策略拦截：${preToolResult.deny.reason}`);
           } else if (toolNeedsApproval(tool, permissionMode)) {
             await this.sessions.updateRunStatus(input.runId, "waiting_approval");
-            const approvalId = `approval_${randomUUID()}`;
             const reason =
               permissionMode === "read-only" ?
                 "当前权限模式为 read-only，写类工具需要用户确认。"
               : "当前工具会产生写入或长期副作用，需要用户确认。";
+            const approval = await this.sessions.createToolApproval({
+              reason,
+              request: {
+                argumentsPreview: previewToolArguments(effectiveToolCall),
+                permissionMode,
+                risk,
+                toolArguments: parsedInput,
+                toolCallId: effectiveToolCall.id,
+                toolName: effectiveToolCall.name,
+              },
+              risk,
+              runId: input.runId,
+              sessionId: input.sessionId,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
+              userId: input.userId,
+            });
             yield {
               type: "tool.approval.required",
-              approvalId,
+              approvalId: approval.id,
               reason,
               risk,
               runId: input.runId,
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
             };
             yield {
               type: "tool.confirmation.required",
-              confirmationId: approvalId,
+              confirmationId: approval.id,
               message: reason,
               runId: input.runId,
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
+            };
+            const decision = await this.sessions.waitForToolApproval({
+              approvalId: approval.id,
+              signal: input.signal,
+              userId: input.userId,
+            });
+            const approved = decision.status === "approved";
+            yield {
+              type: "tool.approval.resolved",
+              approvalId: approval.id,
+              approved,
+              runId: input.runId,
+              status: decision.status,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
             };
             await this.sessions.updateRunStatus(input.runId, "executing_tools");
-            result = toolError(reason, { approvalId, requiresApproval: true });
+            if (approved) {
+              const startedAt = Date.now();
+              result = await tools.execute(effectiveToolCall, {
+                permissionMode,
+                runId: input.runId,
+                signal: input.signal,
+                sessionId: input.sessionId,
+                sessions: this.sessions,
+                userId: input.userId,
+              });
+              durationMs = Date.now() - startedAt;
+            } else {
+              const deniedReason =
+                decision.status === "expired" ?
+                  "工具审批超时，已取消执行。"
+                : "用户拒绝了工具执行请求。";
+              result = toolError(deniedReason, {
+                approvalId: approval.id,
+                approvalStatus: decision.status,
+                requiresApproval: true,
+              });
+            }
           } else {
             const startedAt = Date.now();
             result = await tools.execute(effectiveToolCall, {
