@@ -1436,6 +1436,71 @@ export function ChatWorkspace() {
     );
   }
 
+  const consolePanel = (
+    <section className="console-panel" aria-label="服务控制台">
+      <div className="console-header">
+        <span className="console-title">
+          <Activity size={15} />
+          控制台
+        </span>
+        <span className={`connection-pill ${monitorConnection}`}>
+          {connectionLabel(monitorConnection)}
+        </span>
+      </div>
+
+      <div className="console-summary">
+        <span
+          className={`status-light ${serviceSnapshot?.status ?? monitorConnection}`}
+          aria-hidden="true"
+        />
+        <strong>{overallStatusLabel}</strong>
+        <span>{checkedAtLabel}</span>
+      </div>
+
+      <div className="service-list">
+        {serviceSnapshot ?
+          serviceSnapshot.services.map((service) => (
+            <div className="service-row" key={service.id}>
+              <span
+                className={`status-light ${service.state}`}
+                title={serviceStateLabel(service.state)}
+              />
+              <span className="service-copy">
+                <strong>{service.label}</strong>
+                <span>
+                  {service.message}
+                  {service.detail ? ` · ${service.detail}` : ""}
+                </span>
+              </span>
+            </div>
+          ))
+        : <div className="service-row">
+            <span className="status-light connecting" aria-hidden="true" />
+            <span className="service-copy">
+              <strong>服务快照</strong>
+              <span>正在建立监听</span>
+            </span>
+          </div>}
+      </div>
+
+      <div className="console-log-list" aria-live="polite">
+        {consoleLogs.length > 0 ?
+          consoleLogs.map((log) => (
+            <div className={`console-log-entry ${log.level}`} key={log.id}>
+              <time dateTime={log.at}>{formatConsoleTime(log.at)}</time>
+              <span className="console-log-message">
+                <span className="console-log-meta">
+                  {log.source} · {logLevelLabel(log.level)}
+                </span>
+                <span className="console-log-text">{log.message}</span>
+              </span>
+            </div>
+          ))
+        : <p className="console-empty">等待服务事件</p>}
+      </div>
+    </section>
+  );
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -1486,69 +1551,6 @@ export function ChatWorkspace() {
               <strong>{sessionLabel}</strong>
               <span>{messages.length > 0 ? `${messages.length} 条消息` : "发送消息后开始"}</span>
             </div>}
-        </section>
-
-        <section className="console-panel" aria-label="服务控制台">
-          <div className="console-header">
-            <span className="console-title">
-              <Activity size={15} />
-              控制台
-            </span>
-            <span className={`connection-pill ${monitorConnection}`}>
-              {connectionLabel(monitorConnection)}
-            </span>
-          </div>
-
-          <div className="console-summary">
-            <span
-              className={`status-light ${serviceSnapshot?.status ?? monitorConnection}`}
-              aria-hidden="true"
-            />
-            <strong>{overallStatusLabel}</strong>
-            <span>{checkedAtLabel}</span>
-          </div>
-
-          <div className="service-list">
-            {serviceSnapshot ?
-              serviceSnapshot.services.map((service) => (
-                <div className="service-row" key={service.id}>
-                  <span
-                    className={`status-light ${service.state}`}
-                    title={serviceStateLabel(service.state)}
-                  />
-                  <span className="service-copy">
-                    <strong>{service.label}</strong>
-                    <span>
-                      {service.message}
-                      {service.detail ? ` · ${service.detail}` : ""}
-                    </span>
-                  </span>
-                </div>
-              ))
-            : <div className="service-row">
-                <span className="status-light connecting" aria-hidden="true" />
-                <span className="service-copy">
-                  <strong>服务快照</strong>
-                  <span>正在建立监听</span>
-                </span>
-              </div>}
-          </div>
-
-          <div className="console-log-list" aria-live="polite">
-            {consoleLogs.length > 0 ?
-              consoleLogs.map((log) => (
-                <div className={`console-log-entry ${log.level}`} key={log.id}>
-                  <time dateTime={log.at}>{formatConsoleTime(log.at)}</time>
-                  <span className="console-log-message">
-                    <span className="console-log-meta">
-                      {log.source} · {logLevelLabel(log.level)}
-                    </span>
-                    <span className="console-log-text">{log.message}</span>
-                  </span>
-                </div>
-              ))
-            : <p className="console-empty">等待服务事件</p>}
-          </div>
         </section>
 
         <div className="account-row">
@@ -1761,6 +1763,8 @@ export function ChatWorkspace() {
           </form>
         </div>
       </section>
+
+      <aside className="console-rail">{consolePanel}</aside>
     </main>
   );
 }

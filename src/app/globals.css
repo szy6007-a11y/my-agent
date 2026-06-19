@@ -160,7 +160,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   height: 100vh;
   height: 100dvh;
   min-height: 0;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr) 292px;
   overflow: hidden;
 }
 
@@ -238,8 +238,8 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .chat-list {
-  flex: 0 1 180px;
-  min-height: 70px;
+  flex: 1 1 auto;
+  min-height: 0;
   margin-top: 28px;
   overflow: auto;
 }
@@ -312,6 +312,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
 .console-panel {
   display: grid;
   flex: 1 1 0;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 0;
   gap: 11px;
   margin-top: 20px;
@@ -320,6 +321,23 @@ body > button[aria-label="Open Next.js Dev Tools"],
   border-top: 1px solid var(--border);
   padding: 14px 2px 0;
   scrollbar-gutter: stable;
+}
+
+.console-rail {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: #f8f8f8;
+  padding: 14px 12px;
+}
+
+.console-rail .console-panel {
+  width: 100%;
+  margin-top: 0;
+  border-top: 0;
+  padding: 0 2px;
 }
 
 .console-header,
@@ -521,7 +539,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   flex: 0 0 auto;
   width: 100%;
   min-width: 0;
-  margin-top: 12px;
+  margin-top: auto;
   border-top: 1px solid var(--border);
   background: #f8f8f8;
   padding: 12px 4px 0;
@@ -588,7 +606,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   gap: 38px;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 44px max(24px, calc((100vw - 900px) / 2)) 128px;
+  padding: 44px max(24px, calc((100% - 760px) / 2)) 128px;
 }
 
 .messages-bottom-sentinel {
@@ -1248,6 +1266,10 @@ body > button[aria-label="Open Next.js Dev Tools"],
   }
 
   .sidebar {
+    display: none;
+  }
+
+  .console-rail {
     display: none;
   }
 
