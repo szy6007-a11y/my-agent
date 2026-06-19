@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
   index,
   integer,
   jsonb,
@@ -124,5 +125,125 @@ export const toolApprovals = pgTable(
       table.createdAt.desc(),
     ),
     index("tool_approvals_run_created_idx").on(table.runId, table.createdAt),
+  ],
+);
+
+export const installedSkills = pgTable(
+  "installed_skills",
+  {
+    id: text("id").primaryKey(),
+    activeVersionId: text("active_version_id"),
+    commitSha: text("commit_sha").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    description: text("description").notNull().default(""),
+    enabled: boolean("enabled").notNull().default(false),
+    environment: text("environment").notNull(),
+    githubOwner: text("github_owner").notNull().default(""),
+    githubPath: text("github_path").notNull().default(""),
+    githubRepo: text("github_repo").notNull().default(""),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    metadataJson: jsonb("metadata_json").notNull().default(sql`'{}'::jsonb`),
+    name: text("name").notNull(),
+    requestedRef: text("requested_ref").notNull().default(""),
+    scope: text("scope").notNull().default("user"),
+    slug: text("slug").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    status: text("status").notNull().default("quarantined"),
+    trustLevel: text("trust_level").notNull().default("community"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    index("installed_skills_env_user_status_idx").on(
+      table.environment,
+      table.userId,
+      table.status,
+      table.updatedAt.desc(),
+    ),
+    index("installed_skills_env_user_slug_idx").on(table.environment, table.userId, table.slug),
+  ],
+);
+
+export const skillVersions = pgTable(
+  "skill_versions",
+  {
+    id: text("id").primaryKey(),
+    commitSha: text("commit_sha").notNull(),
+    contentHash: text("content_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    frontmatterJson: jsonb("frontmatter_json").notNull().default(sql`'{}'::jsonb`),
+    installDir: text("install_dir").notNull(),
+    manifestJson: jsonb("manifest_json").notNull().default(sql`'{}'::jsonb`),
+    metadataJson: jsonb("metadata_json").notNull().default(sql`'{}'::jsonb`),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => installedSkills.id, { onDelete: "cascade" }),
+    versionNumber: integer("version_number").notNull(),
+  },
+  (table) => [
+    index("skill_versions_skill_created_idx").on(table.skillId, table.createdAt.desc()),
+  ],
+);
+
+export const skillFiles = pgTable(
+  "skill_files",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+    kind: text("kind").notNull(),
+    mime: text("mime").notNull(),
+    path: text("path").notNull(),
+    sha256: text("sha256").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    storagePath: text("storage_path").notNull(),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => skillVersions.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("skill_files_version_path_idx").on(table.versionId, table.path)],
+);
+
+export const skillPermissions = pgTable(
+  "skill_permissions",
+  {
+    id: text("id").primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    environment: text("environment").notNull(),
+    policyJson: jsonb("policy_json").notNull().default(sql`'{}'::jsonb`),
+    scope: text("scope").notNull(),
+    skillId: text("skill_id").references(() => installedSkills.id, { onDelete: "cascade" }),
+    sourcePattern: text("source_pattern"),
+    status: text("status").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    index("skill_permissions_env_user_status_idx").on(
+      table.environment,
+      table.userId,
+      table.status,
+    ),
+  ],
+);
+
+export const skillAuditEvents = pgTable(
+  "skill_audit_events",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    environment: text("environment").notNull(),
+    eventType: text("event_type").notNull(),
+    payloadJson: jsonb("payload_json").notNull(),
+    runId: text("run_id"),
+    skillId: text("skill_id").references(() => installedSkills.id, { onDelete: "set null" }),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    index("skill_audit_events_env_user_created_idx").on(
+      table.environment,
+      table.userId,
+      table.createdAt.desc(),
+    ),
+    index("skill_audit_events_skill_created_idx").on(table.skillId, table.createdAt.desc()),
   ],
 );

@@ -14,9 +14,14 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "auth_login_attempts",
     "auth_sessions",
     "beta_users",
+    "installed_skills",
     "messages",
     "run_events",
     "sessions",
+    "skill_audit_events",
+    "skill_files",
+    "skill_permissions",
+    "skill_versions",
     "tool_approvals",
   ]);
 
@@ -57,5 +62,5 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "tool_name",
     "user_id",
   ]);
-  assert.equal(REQUIRED_DATABASE_INDEXES.length, 11);
+  assert.equal(REQUIRED_DATABASE_INDEXES.length, 18);
 });

@@ -426,6 +426,32 @@ export class SessionRepository {
     return snapshot;
   }
 
+  async savePromptSnapshot(input: {
+    sessionId: string;
+    snapshot: PromptAssembly;
+    userId: string;
+  }): Promise<PromptAssembly> {
+    await ready();
+    const db = getSql();
+    const rows = await db<PromptSnapshotRow[]>`
+      update sessions
+      set
+        prompt_snapshot_json = ${db.json(toJson(input.snapshot))},
+        prompt_snapshot_created_at = now()
+      where id = ${input.sessionId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      returning prompt_snapshot_json
+    `;
+    const snapshot = toPromptAssembly(rows[0]?.prompt_snapshot_json);
+
+    if (!snapshot) {
+      throw new Error("Session not found or prompt snapshot could not be saved");
+    }
+
+    return snapshot;
+  }
+
   async listSessions(userId: string, limit = 50): Promise<StoredChatSession[]> {
     await ready();
     const db = getSql();

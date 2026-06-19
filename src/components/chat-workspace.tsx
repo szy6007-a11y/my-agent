@@ -68,6 +68,7 @@ type ActiveRunState = {
 type PendingApproval = {
   approvalId: string;
   reason: string;
+  request?: unknown;
   risk: Extract<AgentEvent, { type: "tool.approval.required" }>["risk"];
   runId: string;
   state: "pending" | "submitting";
@@ -186,6 +187,23 @@ function logLevelLabel(level: ServiceConsoleLog["level"]) {
   if (level === "error") return "错误";
   if (level === "warn") return "警告";
   return "信息";
+}
+
+function approvalDetailLines(request: unknown): string[] {
+  const details =
+    request && typeof request === "object" && "details" in request ?
+      (request as { details?: unknown }).details
+    : request;
+  if (!details || typeof details !== "object") {
+    return [];
+  }
+  const record = details as Record<string, unknown>;
+  return [
+    record.sourceUrl ? `来源：${String(record.sourceUrl)}` : "",
+    record.commitSha ? `Commit：${String(record.commitSha).slice(0, 12)}` : "",
+    record.proposalId ? `提案：${String(record.proposalId).replace(/^skill_/, "").slice(0, 8)}` : "",
+    record.trustLevel ? `信任级别：${String(record.trustLevel)}` : "",
+  ].filter(Boolean);
 }
 
 function appendMessageContent(
@@ -970,6 +988,7 @@ export function ChatWorkspace() {
               const nextApproval: PendingApproval = {
                 approvalId: event.approvalId,
                 reason: event.reason,
+                request: event.request,
                 risk: event.risk,
                 runId: event.runId,
                 state: "pending",
@@ -1571,6 +1590,9 @@ export function ChatWorkspace() {
                   <span className="approval-copy">
                     <strong>{approval.toolName}</strong>
                     <span>{approval.reason}</span>
+                    {approvalDetailLines(approval.request).map((line) => (
+                      <small key={line}>{line}</small>
+                    ))}
                   </span>
                   <span className="approval-actions">
                     <button

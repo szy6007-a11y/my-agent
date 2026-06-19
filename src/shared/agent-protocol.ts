@@ -106,6 +106,7 @@ export type AgentEvent =
       type: "tool.approval.required";
       approvalId: string;
       reason: string;
+      request?: unknown;
       runId: string;
       toolCallId: string;
       toolName: string;

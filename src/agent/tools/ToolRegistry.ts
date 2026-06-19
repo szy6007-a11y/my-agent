@@ -1,5 +1,6 @@
 import { memoryTool } from "@/agent/tools/MemoryTool";
 import { sessionSearchTool } from "@/agent/tools/SessionSearchTool";
+import { createSkillTools } from "@/agent/tools/SkillTools";
 import { createWebTools } from "@/agent/tools/WebTools";
 import {
   parseToolArguments,
@@ -12,7 +13,7 @@ import type { ModelToolCall, ModelToolDefinition } from "@/agent/runtime/types";
 import type { ToolUiManifest } from "@/shared/agent-protocol";
 
 function defaultTools(): AgentTool[] {
-  return [memoryTool, sessionSearchTool, ...createWebTools()];
+  return [memoryTool, sessionSearchTool, ...createWebTools(), ...createSkillTools()];
 }
 
 function toolEnabled(tool: AgentTool): boolean {

@@ -16,6 +16,11 @@ export type ToolExecutionContext = {
 };
 
 export type AgentTool = {
+  buildApproval?: (
+    args: unknown,
+    context: ToolExecutionContext,
+    toolCall: ModelToolCall,
+  ) => Promise<{ reason?: string; request?: Record<string, unknown> }> | { reason?: string; request?: Record<string, unknown> };
   definition: ModelToolDefinition;
   execute(args: unknown, context: ToolExecutionContext, toolCall: ModelToolCall): Promise<string>;
   isEnabled?: () => boolean;

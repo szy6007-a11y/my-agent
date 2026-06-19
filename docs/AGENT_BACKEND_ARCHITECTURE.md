@@ -614,8 +614,19 @@ type AgentEvent =
 
 - `skills/**/SKILL.md` 存说明和步骤。
 - system prompt 只注入技能索引。
-- Agent 明确需要时调用 `skill_view` 读取完整技能。
+- Agent 明确需要时调用 `Skill` 工具读取完整技能正文或支持文件。
 - 技能可声明 `tools`、`when_to_use`、`references`。
+
+GitHub Skill 安装是受治理的包管理能力，不是把远端 Markdown 直接拼进 prompt：
+
+- `install_github_skill` 解析 `github.com` repo/path/ref，固定到 commit SHA，通过 GitHub Contents API 下载选中目录，进入 quarantine 并生成安装提案。
+- `activate_skill_install` 是写操作，必须走工具审批；审批 payload 包含 source URL、commit SHA、proposal id、trust level 和版本目录。
+- 激活后文件进入用户作用域的 active skills 目录，`SkillIndex` 只暴露短索引；完整正文仍需 `Skill` 工具按需加载。
+- 安装状态、版本、文件清单、权限策略和审计事件分别落在 `installed_skills`、`skill_versions`、`skill_files`、`skill_permissions` 和 `skill_audit_events`。
+- 用户安装的 Skill、支持文件、脚本、模板和资源都按外部不可信上下文处理，不能提升工具权限、覆盖 system prompt 或绕过审批。
+- session prompt snapshot 带 Skill Index 签名；安装、启用、禁用或卸载 Skill 后，新 run 会刷新 snapshot，避免旧会话看不到新能力。
+- GitHub 下载必须拒绝路径穿越、绝对路径、symlink/submodule、超大 bundle、平台不兼容和缺失根级 `SKILL.md` 的包。
+- 验收命令：`RUN_GITHUB_SKILL_E2E=true npx tsx --test src/agent/skills/GithubSkillAgentFlow.e2e.test.ts`。该测试会真实输入“下载 GitHub skill 并安装后使用”，自动审批，验证下载、启用、加载和应用闭环。
 
 ### MCP
 
@@ -692,6 +703,8 @@ MVP API：
 | `GET` | `/api/agent/sessions/:sessionId/messages` | 消息历史 |
 | `POST` | `/api/agent/sessions/:sessionId/compact` | 手动压缩 |
 | `GET` | `/api/agent/tools` | 当前可用工具和权限 |
+| `GET` | `/api/agent/skills` | 当前用户已安装、禁用和待启用的 Skill |
+| `PATCH` | `/api/agent/skills/:skillId` | 启用、禁用或卸载 Skill |
 
 `POST /api/agent/runs` 请求示例：
 

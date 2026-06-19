@@ -4,7 +4,7 @@ import {
   ContextCompressor,
   estimateAgentMessages,
 } from "@/agent/context/ContextCompressor";
-import { ContextEngine } from "@/agent/context/ContextEngine";
+import { ContextEngine, promptSnapshotIsFresh } from "@/agent/context/ContextEngine";
 import { ModelRouter } from "@/agent/models/ModelRouter";
 import { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
 import { sanitizeModelMessages } from "@/agent/runtime/PayloadSanitizer";
@@ -142,6 +142,10 @@ function toolNeedsApproval(tool: AgentTool | undefined, permissionMode: Permissi
     return false;
   }
 
+  if (tool.requiresApproval === true) {
+    return true;
+  }
+
   if (tool.isReadOnly === true) {
     return false;
   }
@@ -150,8 +154,7 @@ function toolNeedsApproval(tool: AgentTool | undefined, permissionMode: Permissi
     permissionMode === "read-only" ||
     permissionMode === "ask-on-write" ||
     permissionMode === "plan" ||
-    permissionMode === "auto-safe" ||
-    tool.requiresApproval === true
+    permissionMode === "auto-safe"
   );
 }
 
@@ -249,23 +252,31 @@ export class AgentLoop {
         sanitized: reminder.sanitized || preModelHookResult.lastUserContentRewritten,
       };
     }
+    const currentPromptSnapshot = this.contextEngine.assemblePrompt({
+      availableTools: tools.names,
+      model: input.model,
+      provider: "deepseek",
+      sessionId: input.sessionId,
+      userId: input.userId,
+    });
     const storedPromptSnapshot = await this.sessions.getPromptSnapshot({
       sessionId: input.sessionId,
       userId: input.userId,
     });
     const promptSnapshot =
-      storedPromptSnapshot ??
-      (await this.sessions.savePromptSnapshotIfAbsent({
-        sessionId: input.sessionId,
-        snapshot: this.contextEngine.assemblePrompt({
-          availableTools: tools.names,
-          model: input.model,
-          provider: "deepseek",
+      promptSnapshotIsFresh(storedPromptSnapshot, currentPromptSnapshot) ? storedPromptSnapshot
+      : "savePromptSnapshot" in this.sessions &&
+        typeof this.sessions.savePromptSnapshot === "function" ?
+        await this.sessions.savePromptSnapshot({
           sessionId: input.sessionId,
+          snapshot: currentPromptSnapshot,
           userId: input.userId,
-        }),
+        })
+      : await this.sessions.savePromptSnapshotIfAbsent({
+        sessionId: input.sessionId,
+        snapshot: currentPromptSnapshot,
         userId: input.userId,
-      }));
+      });
     let effectiveHistory = history;
     try {
       const compression = await this.contextCompressor.maybeCompress({
@@ -623,25 +634,39 @@ export class AgentLoop {
 
           let result: string;
           let durationMs = 0;
+          const toolContext = {
+            permissionMode,
+            runId: input.runId,
+            signal: input.signal,
+            sessionId: input.sessionId,
+            sessions: this.sessions,
+            userId: input.userId,
+          };
 
           if (preToolResult.deny) {
             result = toolError(`工具调用被策略拦截：${preToolResult.deny.reason}`);
           } else if (toolNeedsApproval(tool, permissionMode)) {
             await this.sessions.updateRunStatus(input.runId, "waiting_approval");
-            const reason =
+            const defaultReason =
               permissionMode === "read-only" ?
                 "当前权限模式为 read-only，写类工具需要用户确认。"
               : "当前工具会产生写入或长期副作用，需要用户确认。";
+            const approvalDetails = tool?.buildApproval ?
+              await tool.buildApproval(parsedInput, toolContext, effectiveToolCall)
+            : {};
+            const reason = approvalDetails.reason ?? defaultReason;
+            const approvalRequest = {
+              argumentsPreview: previewToolArguments(effectiveToolCall),
+              permissionMode,
+              risk,
+              toolArguments: parsedInput,
+              toolCallId: effectiveToolCall.id,
+              toolName: effectiveToolCall.name,
+              ...(approvalDetails.request ? { details: approvalDetails.request } : {}),
+            };
             const approval = await this.sessions.createToolApproval({
               reason,
-              request: {
-                argumentsPreview: previewToolArguments(effectiveToolCall),
-                permissionMode,
-                risk,
-                toolArguments: parsedInput,
-                toolCallId: effectiveToolCall.id,
-                toolName: effectiveToolCall.name,
-              },
+              request: approvalRequest,
               risk,
               runId: input.runId,
               sessionId: input.sessionId,
@@ -653,6 +678,7 @@ export class AgentLoop {
               type: "tool.approval.required",
               approvalId: approval.id,
               reason,
+              request: approvalRequest,
               risk,
               runId: input.runId,
               toolCallId: effectiveToolCall.id,
@@ -689,14 +715,7 @@ export class AgentLoop {
             await this.sessions.updateRunStatus(input.runId, "executing_tools");
             if (approved) {
               const startedAt = Date.now();
-              result = await tools.execute(effectiveToolCall, {
-                permissionMode,
-                runId: input.runId,
-                signal: input.signal,
-                sessionId: input.sessionId,
-                sessions: this.sessions,
-                userId: input.userId,
-              });
+              result = await tools.execute(effectiveToolCall, toolContext);
               durationMs = Date.now() - startedAt;
             } else {
               const deniedReason =
@@ -711,14 +730,7 @@ export class AgentLoop {
             }
           } else {
             const startedAt = Date.now();
-            result = await tools.execute(effectiveToolCall, {
-              permissionMode,
-              runId: input.runId,
-              signal: input.signal,
-              sessionId: input.sessionId,
-              sessions: this.sessions,
-              userId: input.userId,
-            });
+            result = await tools.execute(effectiveToolCall, toolContext);
             durationMs = Date.now() - startedAt;
           }
           const failure = failedToolMessage(result);

@@ -15,6 +15,13 @@ export const REQUIRED_DATABASE_INDEXES = [
   "messages_session_created_idx",
   "run_events_run_created_idx",
   "sessions_environment_user_updated_idx",
+  "installed_skills_env_user_slug_idx",
+  "installed_skills_env_user_status_idx",
+  "skill_audit_events_env_user_created_idx",
+  "skill_audit_events_skill_created_idx",
+  "skill_files_version_path_idx",
+  "skill_permissions_env_user_status_idx",
+  "skill_versions_skill_created_idx",
   "tool_approvals_environment_user_status_idx",
   "tool_approvals_run_created_idx",
 ] as const;

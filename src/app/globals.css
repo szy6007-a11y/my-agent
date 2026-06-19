@@ -1035,7 +1035,8 @@ body > button[aria-label="Open Next.js Dev Tools"],
 .run-status-copy strong,
 .run-status-copy span,
 .approval-copy strong,
-.approval-copy span {
+.approval-copy span,
+.approval-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1049,9 +1050,14 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .run-status-copy span,
-.approval-copy span {
+.approval-copy span,
+.approval-copy small {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.approval-copy small {
+  font-size: 10px;
 }
 
 .approval-row {

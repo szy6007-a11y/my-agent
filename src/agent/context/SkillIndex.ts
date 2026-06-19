@@ -1,21 +1,22 @@
+import { createHash } from "crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, resolve } from "path";
 
-type SkillFrontmatter = {
-  description?: string;
-  name?: string;
-  platforms?: string[];
-};
+import { parseSkillManifest } from "@/agent/skills/SkillManifest";
+import { activeSkillsRoot } from "@/agent/skills/SkillPaths";
 
 export type SkillIndexEntry = {
   category: string;
   description: string;
   name: string;
   path: string;
+  source: "workspace" | "user-installed";
+  whenToUse?: string;
 };
 
 export type SkillIndex = {
   entries: SkillIndexEntry[];
+  hash: string;
   roots: string[];
 };
 
@@ -52,57 +53,6 @@ function walkSkillFiles(root: string): string[] {
   return result;
 }
 
-function parseScalar(value: string): string {
-  return value.trim().replace(/^['"]|['"]$/g, "");
-}
-
-function parseInlineList(value: string): string[] {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
-    return trimmed ? [parseScalar(trimmed)] : [];
-  }
-
-  return trimmed
-    .slice(1, -1)
-    .split(",")
-    .map(parseScalar)
-    .filter(Boolean);
-}
-
-function parseFrontmatter(raw: string): SkillFrontmatter {
-  if (!raw.startsWith("---")) {
-    return {};
-  }
-
-  const end = raw.indexOf("\n---", 3);
-  if (end === -1) {
-    return {};
-  }
-
-  const frontmatter: SkillFrontmatter = {};
-  const body = raw.slice(3, end).split(/\r?\n/);
-
-  for (const line of body) {
-    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!match) {
-      continue;
-    }
-
-    const [, key, value] = match;
-    if (key === "name") {
-      frontmatter.name = parseScalar(value);
-    }
-    if (key === "description") {
-      frontmatter.description = parseScalar(value);
-    }
-    if (key === "platforms") {
-      frontmatter.platforms = parseInlineList(value);
-    }
-  }
-
-  return frontmatter;
-}
-
 function isPlatformCompatible(platforms: string[] | undefined): boolean {
   if (!platforms || platforms.length === 0) {
     return true;
@@ -119,51 +69,96 @@ function isPlatformCompatible(platforms: string[] | undefined): boolean {
   return platforms.some((platform) => aliases.has(platform.toLowerCase()));
 }
 
-function buildEntry(skillFile: string, root: string): SkillIndexEntry | null {
+function buildEntry(
+  skillFile: string,
+  root: string,
+  source: SkillIndexEntry["source"],
+): SkillIndexEntry | null {
   try {
     const raw = readFileSync(skillFile, "utf8");
-    const frontmatter = parseFrontmatter(raw);
-    if (!isPlatformCompatible(frontmatter.platforms)) {
-      return null;
-    }
-
     const rel = relative(root, skillFile);
     const parts = rel.split(/[\\/]/);
     const skillDirectoryName = parts.length >= 2 ? parts[parts.length - 2] : "general";
-    const category = parts.length > 2 ? parts.slice(0, -2).join("/") : parts[0] || "general";
+    const category =
+      source === "user-installed" ? "installed"
+      : parts.length > 2 ? parts.slice(0, -2).join("/")
+      : parts[0] || "general";
+    const manifest = parseSkillManifest(raw, skillDirectoryName);
+    if (!isPlatformCompatible(manifest.platforms)) {
+      return null;
+    }
 
     return {
       category,
-      description: frontmatter.description ?? "",
-      name: frontmatter.name || skillDirectoryName,
+      description: manifest.description,
+      name: manifest.name || skillDirectoryName,
       path: rel,
+      source,
+      whenToUse: manifest.whenToUse,
     };
   } catch {
     return null;
   }
 }
 
-export function buildSkillIndex(cwd = process.cwd()): SkillIndex {
-  const roots = [join(cwd, "skills"), join(cwd, "rules", "skills")]
+function indexHash(entries: SkillIndexEntry[]): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        entries.map((entry) => ({
+          category: entry.category,
+          description: entry.description,
+          name: entry.name,
+          path: entry.path,
+          source: entry.source,
+          whenToUse: entry.whenToUse,
+        })),
+      ),
+    )
+    .digest("hex");
+}
+
+export function buildSkillIndex(
+  cwd = process.cwd(),
+  input: { userId?: string } = {},
+): SkillIndex {
+  const workspaceRoots = [join(cwd, "skills"), join(cwd, "rules", "skills")]
     .map((root) => resolve(root))
     .filter((root) => directoryExists(root));
+  const installedRoots =
+    input.userId && directoryExists(activeSkillsRoot(input.userId)) ?
+      [activeSkillsRoot(input.userId)]
+    : [];
+  const roots = [...workspaceRoots, ...installedRoots];
 
   const entriesByName = new Map<string, SkillIndexEntry>();
 
-  for (const root of roots) {
+  for (const root of workspaceRoots) {
     for (const skillFile of walkSkillFiles(root)) {
-      const entry = buildEntry(skillFile, root);
+      const entry = buildEntry(skillFile, root, "workspace");
       if (entry && !entriesByName.has(entry.name)) {
         entriesByName.set(entry.name, entry);
       }
     }
   }
 
+  for (const root of installedRoots) {
+    for (const skillFile of walkSkillFiles(root)) {
+      const entry = buildEntry(skillFile, root, "user-installed");
+      if (entry) {
+        entriesByName.set(entry.name, entry);
+      }
+    }
+  }
+
+  const entries = [...entriesByName.values()].sort((a, b) => {
+    const categoryCompare = a.category.localeCompare(b.category);
+    return categoryCompare === 0 ? a.name.localeCompare(b.name) : categoryCompare;
+  });
+
   return {
-    entries: [...entriesByName.values()].sort((a, b) => {
-      const categoryCompare = a.category.localeCompare(b.category);
-      return categoryCompare === 0 ? a.name.localeCompare(b.name) : categoryCompare;
-    }),
+    entries,
+    hash: indexHash(entries),
     roots,
   };
 }
@@ -186,7 +181,8 @@ export function renderSkillIndex(index: SkillIndex): string {
     lines.push(`  ${category}:`);
     for (const entry of entries) {
       const suffix = entry.description ? `: ${entry.description}` : "";
-      lines.push(`    - ${entry.name}${suffix} (${entry.path})`);
+      const whenToUse = entry.whenToUse ? ` Trigger: ${entry.whenToUse}` : "";
+      lines.push(`    - ${entry.name}${suffix}${whenToUse} [${entry.source}] (${entry.path})`);
     }
   }
 

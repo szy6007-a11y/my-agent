@@ -71,6 +71,26 @@ function refreshPromptSnapshotForRun(
   };
 }
 
+export function promptSnapshotIsFresh(
+  stored: PromptAssembly | null | undefined,
+  current: PromptAssembly,
+): stored is PromptAssembly {
+  if (!stored) {
+    return false;
+  }
+  if (stored.signature && current.signature) {
+    return stored.signature === current.signature;
+  }
+  if (stored.metadata && current.metadata) {
+    return (
+      stored.metadata.promptVersion === current.metadata.promptVersion &&
+      stored.metadata.availableToolsHash === current.metadata.availableToolsHash &&
+      stored.metadata.skillIndexHash === current.metadata.skillIndexHash
+    );
+  }
+  return stored.prompt === current.prompt;
+}
+
 function toModelMessage(
   message: AgentMessage,
   input: { preserveTrustedRuntimeReminder?: boolean } = {},

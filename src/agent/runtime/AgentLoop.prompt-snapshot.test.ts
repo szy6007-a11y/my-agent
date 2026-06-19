@@ -32,7 +32,15 @@ class CountingPromptAssembler {
 
   assemble(): PromptAssembly {
     this.count += 1;
-    return makePrompt(`prompt-${this.count}`);
+    return {
+      ...makePrompt(`prompt-${this.count}`),
+      metadata: {
+        availableToolsHash: "tools-v1",
+        promptVersion: "test",
+        skillIndexHash: "skills-v1",
+      },
+      signature: "stable-signature",
+    };
   }
 }
 
@@ -228,7 +236,7 @@ test("AgentLoop freezes the session prompt snapshot across runs", async () => {
     }),
   );
 
-  assert.equal(promptAssembler.count, 1);
+  assert.equal(promptAssembler.count, 2);
   assert.equal(sessions.savedSnapshots, 1);
   assert.deepEqual(modelRouter.systemPrompts, ["prompt-1", "prompt-1"]);
 });
