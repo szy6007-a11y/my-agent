@@ -127,6 +127,7 @@ function detectVisibleToolProtocolViolation(
     const patterns = [
       new RegExp(`<\\s*${escaped}\\b`, "i"),
       new RegExp(`<\\s*tool\\b[^>]*>\\s*${escaped}\\b`, "i"),
+      new RegExp(`<[^>\\n]*\\binvoke\\s+name=["']${escaped}["']`, "i"),
       new RegExp(`\\b${escaped}\\s*\\(\\s*[{\\[]`, "i"),
     ];
 

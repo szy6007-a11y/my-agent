@@ -189,6 +189,24 @@ class VisibleToolThenFinalModelRouter {
   }
 }
 
+class VisibleDsmlToolThenFinalModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield {
+        type: "text_delta" as const,
+        text:
+          '已经完成了前半部分的写入。\n\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="write_file_chunk">\n<｜｜DSML｜｜parameter name="content" string="true">\n<section>bad visible tool call</section>',
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "已恢复 DSML。" };
+  }
+}
+
 class FakeWriteToolCallModelRouter {
   readonly payloads: ModelMessage[][] = [];
 
@@ -497,6 +515,54 @@ test("AgentLoop recovers once when the model writes a visible tool call", async 
   assert.equal(events.some((event) => event.type === "protocol.recovery"), true);
   assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
   assert.equal(sessions.messages.at(-1)?.content, "已恢复。");
+});
+
+test("AgentLoop recovers when the model writes a visible DeepSeek DSML tool call", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "继续生成 PPT",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new VisibleDsmlToolThenFinalModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      runId: "run_dsml_protocol",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  const recovery = events.find((event) => event.type === "protocol.recovery");
+
+  assert.equal(modelRouter.payloads.length, 2);
+  assert.deepEqual(recovery, {
+    reason: "visible_tool_call",
+    retryAttempt: 1,
+    runId: "run_dsml_protocol",
+    toolName: "write_file_chunk",
+    type: "protocol.recovery",
+  });
+  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
+  assert.equal(sessions.messages.at(-1)?.content, "已恢复 DSML。");
 });
 
 test("AgentLoop stops when the persisted run is cancelled", async () => {
