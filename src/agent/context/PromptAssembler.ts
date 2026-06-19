@@ -45,7 +45,7 @@ export type PromptAssemblerInput = {
   userId?: string;
 };
 
-const PROMPT_VERSION = "2026-06-17.claude-quality-v3";
+const PROMPT_VERSION = "2026-06-19.output-protocol-v1";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 
 function promptFilePath(filename: string): string {
@@ -313,6 +313,7 @@ export class PromptAssembler {
       { ...readPromptFragment("interaction-contract.md"), tag: "interaction_contract" },
       { ...readPromptFragment("context-discipline.md"), tag: "context_discipline" },
       { ...readPromptFragment("tool-guidance.md"), tag: "tool_guidance" },
+      { ...readPromptFragment("output-protocol-guidance.md"), tag: "output_protocol_guidance" },
       buildAvailableToolsSection(input.availableTools),
       { ...readPromptFragment("software-engineering-guidance.md"), tag: "software_engineering_guidance" },
       { ...readPromptFragment("file-operation-guidance.md"), tag: "file_operation_guidance" },

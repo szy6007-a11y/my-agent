@@ -41,6 +41,7 @@ export type PostModelResponseContext = {
   runId: string;
   sessionId: string;
   toolCalls: ModelToolCall[];
+  toolNames: string[];
   userId: string;
 };
 

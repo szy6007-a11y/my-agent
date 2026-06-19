@@ -181,7 +181,8 @@ class VisibleToolThenFinalModelRouter {
   async *stream(input: ModelStreamInput) {
     this.payloads.push(input.context.messages);
     if (this.payloads.length === 1) {
-      yield { type: "text_delta" as const, text: 'web_search({"query":"test"})' };
+      yield { type: "text_delta" as const, text: "我来调用 web_" };
+      yield { type: "text_delta" as const, text: 'search({"query":"test"})' };
       return;
     }
 
@@ -198,7 +199,12 @@ class VisibleDsmlToolThenFinalModelRouter {
       yield {
         type: "text_delta" as const,
         text:
-          '已经完成了前半部分的写入。\n\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="write_file_chunk">\n<｜｜DSML｜｜parameter name="content" string="true">\n<section>bad visible tool call</section>',
+          '已经完成了前半部分的写入。\n\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="write_',
+      };
+      yield {
+        type: "text_delta" as const,
+        text:
+          'file_chunk">\n<｜｜DSML｜｜parameter name="content" string="true">\n<section>bad visible tool call</section>',
       };
       return;
     }
@@ -213,6 +219,32 @@ class FakeWriteToolCallModelRouter {
   async *stream(input: ModelStreamInput) {
     this.payloads.push(input.context.messages);
     if (this.payloads.length === 1) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: JSON.stringify({ value: "ok" }),
+            id: "call_write",
+            name: "fake_write",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "写入完成。" };
+  }
+}
+
+class VisibleToolTextThenNativeToolCallModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield { type: "text_delta" as const, text: "先执行 fake_" };
+      yield { type: "text_delta" as const, text: 'write({"value":"ok"})' };
+      yield { type: "tool_call_started" as const };
       yield {
         type: "tool_calls" as const,
         toolCalls: [
@@ -514,6 +546,13 @@ test("AgentLoop recovers once when the model writes a visible tool call", async 
   assert.equal(modelRouter.payloads.length, 2);
   assert.equal(events.some((event) => event.type === "protocol.recovery"), true);
   assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
+  assert.equal(
+    sessions.updatedMessages.some((message) =>
+      message.content.includes("[protocol-correction:visible_tool_call]"),
+    ),
+    true,
+  );
+  assert.equal(JSON.stringify(modelRouter.payloads[1]).includes("[protocol-correction:visible_tool_call]"), true);
   assert.equal(sessions.messages.at(-1)?.content, "已恢复。");
 });
 
@@ -563,6 +602,53 @@ test("AgentLoop recovers when the model writes a visible DeepSeek DSML tool call
   });
   assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
   assert.equal(sessions.messages.at(-1)?.content, "已恢复 DSML。");
+});
+
+test("AgentLoop absorbs visible tool text when the same attempt emits a native tool call", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+    import("@/agent/tools/ToolRegistry"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "运行写工具",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new VisibleToolTextThenNativeToolCallModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([fakeWriteTool]),
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      permissionMode: "bypass",
+      runId: "run_absorb_visible_tool_text",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  assert.equal(modelRouter.payloads.length, 2);
+  assert.equal(events.some((event) => event.type === "protocol.recovery"), false);
+  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
+  assert.equal(JSON.stringify(modelRouter.payloads[1]).includes("fake_write({"), false);
+  assert.equal(sessions.messages.find((message) => message.toolCalls?.length)?.content, "");
+  assert.equal(sessions.messages.at(-1)?.content, "写入完成。");
 });
 
 test("AgentLoop stops when the persisted run is cancelled", async () => {

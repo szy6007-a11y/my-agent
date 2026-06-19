@@ -9,10 +9,15 @@ import { ModelRouter } from "@/agent/models/ModelRouter";
 import { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
 import { sanitizeModelMessages } from "@/agent/runtime/PayloadSanitizer";
 import {
+  SYSTEM_REMINDER_CLOSE_TAG,
   applyRuntimeReminder,
   previewToolArguments,
   previewToolResult,
 } from "@/agent/runtime/SystemReminder";
+import {
+  VisibleToolCallDetector,
+  type VisibleToolCallViolation,
+} from "@/agent/runtime/VisibleToolCallDetector";
 import {
   createDefaultHookRegistry,
   type AgentHookRegistry,
@@ -46,6 +51,7 @@ const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
   "工具调用轮次已经达到上限。请停止调用工具，基于上面已经返回的工具结果给出当前可支持的最终回答；如果证据不足，请说明限制和已经查到的信息。";
 const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
 const EMPTY_ASSISTANT_FALLBACK = "我没有生成有效回复，请再试一次。";
+const VISIBLE_TOOL_CALL_CORRECTION_MARKER = "[protocol-correction:visible_tool_call]";
 
 function failedToolMessage(result: string): string | null {
   try {
@@ -110,37 +116,36 @@ function latestUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
   return undefined;
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function buildProtocolCorrection(toolName: string): string {
+  return `上一轮模型在正文中手写了工具调用 ${toolName}，这不是有效协议。请重新处理当前请求：如果确实需要 ${toolName}，必须使用原生 tool call；如果不需要工具，请直接给出中文正文。不要在正文里输出工具 JSON、XML、函数调用文本或内部协议。`;
 }
 
-function detectVisibleToolProtocolViolation(
-  text: string,
-  toolNames: string[],
-): string | null {
-  if (!text.trim()) {
-    return null;
+function appendProtocolCorrection(content: string, correction: string): string {
+  if (content.includes(VISIBLE_TOOL_CALL_CORRECTION_MARKER)) {
+    return content;
   }
 
-  for (const toolName of toolNames) {
-    const escaped = escapeRegExp(toolName);
-    const patterns = [
-      new RegExp(`<\\s*${escaped}\\b`, "i"),
-      new RegExp(`<\\s*tool\\b[^>]*>\\s*${escaped}\\b`, "i"),
-      new RegExp(`<[^>\\n]*\\binvoke\\s+name=["']${escaped}["']`, "i"),
-      new RegExp(`\\b${escaped}\\s*\\(\\s*[{\\[]`, "i"),
-    ];
+  const addition = `${VISIBLE_TOOL_CALL_CORRECTION_MARKER}\n${correction}`;
+  if (content.includes(SYSTEM_REMINDER_CLOSE_TAG)) {
+    return content.replace(SYSTEM_REMINDER_CLOSE_TAG, `\n\n${addition}\n${SYSTEM_REMINDER_CLOSE_TAG}`);
+  }
 
-    if (patterns.some((pattern) => pattern.test(text))) {
-      return toolName;
+  return `${content.trimEnd()}\n\n${addition}`;
+}
+
+function appendCorrectionToLatestModelUserMessage(
+  messages: ModelMessage[],
+  correction: string,
+): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" && typeof message.content === "string") {
+      message.content = appendProtocolCorrection(message.content, correction);
+      return true;
     }
   }
 
-  return null;
-}
-
-function buildProtocolCorrection(toolName: string): string {
-  return `上一轮模型在正文中手写了工具调用 ${toolName}，这不是有效协议。请重新处理当前请求：如果确实需要 ${toolName}，必须使用原生 tool call；如果不需要工具，请直接给出中文正文。不要在正文里输出工具 JSON、XML、函数调用文本或内部协议。`;
+  return false;
 }
 
 function isContextOverflowError(error: unknown): boolean {
@@ -410,6 +415,8 @@ export class AgentLoop {
         let passText = "";
         let visiblePassText = "";
         let passTextMovedToReasoning = false;
+        let visibleToolCallViolation: VisibleToolCallViolation | null = null;
+        const visibleToolCallDetector = new VisibleToolCallDetector(tools.names);
         const toolCalls: ModelToolCall[] = [];
         const sanitizedPayload = sanitizeModelMessages(workingMessages);
         if (sanitizedPayload.changed) {
@@ -445,6 +452,10 @@ export class AgentLoop {
 
           if (event.type === "text_delta") {
             passText += event.text;
+            if (visibleToolCallViolation) {
+              continue;
+            }
+
             if (passTextMovedToReasoning) {
               yield {
                 type: "reasoning.delta",
@@ -452,6 +463,22 @@ export class AgentLoop {
                 text: event.text,
               };
             } else {
+              const violation = visibleToolCallDetector.push(event.text);
+              if (violation) {
+                visibleToolCallViolation = violation;
+                const retractedText = visiblePassText;
+                visiblePassText = "";
+                if (retractedText) {
+                  visibleAssistantText = removeVisibleText(visibleAssistantText, retractedText);
+                  yield {
+                    type: "assistant.delta.retracted",
+                    messageId: assistantMessageId,
+                    text: retractedText,
+                  };
+                }
+                continue;
+              }
+
               visiblePassText += event.text;
               visibleAssistantText += event.text;
               yield {
@@ -476,6 +503,9 @@ export class AgentLoop {
 
           if (event.type === "tool_call_started" && !passTextMovedToReasoning) {
             passTextMovedToReasoning = true;
+            if (visibleToolCallViolation) {
+              continue;
+            }
             visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
             if (visiblePassText) {
               yield {
@@ -504,9 +534,8 @@ export class AgentLoop {
         }
 
         if (toolCalls.length === 0) {
-          const visibleToolCall = detectVisibleToolProtocolViolation(passText, tools.names);
           if (
-            visibleToolCall &&
+            visibleToolCallViolation &&
             protocolRecoveryAttempts < MAX_PROTOCOL_RECOVERY_ATTEMPTS
           ) {
             protocolRecoveryAttempts += 1;
@@ -518,21 +547,52 @@ export class AgentLoop {
                 text: visiblePassText,
               };
             }
-            workingMessages.push({
-              role: "user",
-              content: buildProtocolCorrection(visibleToolCall),
-            });
+            const correction = buildProtocolCorrection(visibleToolCallViolation.toolName);
+            const correctionTarget =
+              history.find((message) => message.id === input.userMessageId) ??
+              latestUserMessage(history);
+            if (correctionTarget) {
+              const correctedContent = appendProtocolCorrection(
+                correctionTarget.content,
+                correction,
+              );
+              if (correctedContent !== correctionTarget.content) {
+                correctionTarget.content = correctedContent;
+                await this.sessions.updateMessageContent({
+                  content: correctedContent,
+                  messageId: correctionTarget.id,
+                  sessionId: input.sessionId,
+                  userId: input.userId,
+                });
+              }
+            }
+            if (!appendCorrectionToLatestModelUserMessage(workingMessages, correction)) {
+              workingMessages.push({
+                role: "user",
+                content: correction,
+              });
+            }
             yield {
               type: "protocol.recovery",
               reason: "visible_tool_call",
               retryAttempt: protocolRecoveryAttempts,
               runId: input.runId,
-              toolName: visibleToolCall,
+              toolName: visibleToolCallViolation.toolName,
             };
             continue;
           }
 
-          if (passTextMovedToReasoning && passText.trim()) {
+          if (visibleToolCallViolation) {
+            const replacement = "模型输出了无效的工具调用文本，已停止展示。请重试。";
+            visibleAssistantText += replacement;
+            yield {
+              type: "assistant.delta",
+              messageId: assistantMessageId,
+              text: replacement,
+            };
+          }
+
+          if (!visibleToolCallViolation && passTextMovedToReasoning && passText.trim()) {
             visibleAssistantText += passText;
             yield {
               type: "assistant.delta",
@@ -556,6 +616,7 @@ export class AgentLoop {
             runId: input.runId,
             sessionId: input.sessionId,
             toolCalls: [],
+            toolNames: tools.names,
             userId: input.userId,
           });
           if (postModelResponse.deny) {
@@ -615,7 +676,8 @@ export class AgentLoop {
           return;
         }
 
-        if (passText && !passTextMovedToReasoning) {
+        const assistantToolContent = visibleToolCallViolation ? "" : passText;
+        if (assistantToolContent && !passTextMovedToReasoning) {
           visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
           yield {
             type: "assistant.delta.retracted",
@@ -625,18 +687,18 @@ export class AgentLoop {
           yield {
             type: "reasoning.delta",
             messageId: assistantMessageId,
-            text: passText,
+            text: assistantToolContent,
           };
         }
 
         workingMessages.push({
           role: "assistant",
-          content: passText.trim() ? passText : null,
+          content: assistantToolContent.trim() ? assistantToolContent : null,
           toolCalls,
         });
 
         await this.sessions.appendMessage({
-          content: passText,
+          content: assistantToolContent,
           role: "assistant",
           sessionId: input.sessionId,
           toolCalls,
@@ -952,6 +1014,7 @@ export class AgentLoop {
         runId: input.runId,
         sessionId: input.sessionId,
         toolCalls: [],
+        toolNames: tools.names,
         userId: input.userId,
       });
       if (finalizerPostModelResponse.deny) {
