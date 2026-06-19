@@ -327,6 +327,37 @@ class ChunkedWriteModelRouter {
   }
 }
 
+class LongChunkedWriteModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  constructor(private readonly chunkCount = 7) {}
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    const sequence = this.payloads.length;
+    if (sequence <= this.chunkCount) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: JSON.stringify({
+              content: `part-${sequence}`,
+              final: sequence === this.chunkCount,
+              path: "deck.html",
+              sequence,
+            }),
+            id: `call_chunk_${sequence}`,
+            name: "fake_dynamic_chunk_write",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "长分段写入完成。" };
+  }
+}
+
 const fakeWriteTool: AgentTool = {
   name: "fake_write",
   definition: {
@@ -806,6 +837,55 @@ test("AgentLoop can approve the first chunk and continue ordered chunk appends w
   assert.equal(completedTools.length, 2);
   assert.equal(events.some((event) => event.type === "tool.failed"), false);
   assert.equal(sessions.messages.at(-1)?.content, "分段写入完成。");
+});
+
+test("AgentLoop keeps enough iteration budget for long chunked file writes", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+    import("@/agent/tools/ToolRegistry"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "用 PPT skill 生成一个 HTML PPT，然后让我下载",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new LongChunkedWriteModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([fakeDynamicChunkWriteTool]),
+    { maxToolRounds: 8 },
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      permissionMode: "bypass",
+      runId: "run_long_chunk_write",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  const completedTools = events.filter((event) => event.type === "tool.completed");
+
+  assert.equal(modelRouter.payloads.length, 8);
+  assert.equal(completedTools.length, 7);
+  assert.equal(events.some((event) => event.type === "tool.failed"), false);
+  assert.equal(sessions.statuses.includes("finalizing"), false);
+  assert.equal(sessions.messages.at(-1)?.content, "长分段写入完成。");
 });
 
 test("AgentLoop emits artifact events and stores artifacts on the final assistant message", async () => {

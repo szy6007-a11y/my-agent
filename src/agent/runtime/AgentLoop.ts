@@ -44,7 +44,9 @@ import {
   type ToolExecutionContext,
 } from "@/agent/tools/types";
 
-const MAX_TOOL_ROUNDS = 6;
+const DEFAULT_MAX_TOOL_ROUNDS = 90;
+const MAX_TOOL_ROUNDS_ENV = "AGENT_MAX_TOOL_ROUNDS";
+const MAX_TOOL_ROUNDS_UPPER_BOUND = 300;
 const MAX_PROTOCOL_RECOVERY_ATTEMPTS = 1;
 const RUN_CANCEL_POLL_INTERVAL_MS = 500;
 const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
@@ -52,6 +54,33 @@ const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
 const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
 const EMPTY_ASSISTANT_FALLBACK = "我没有生成有效回复，请再试一次。";
 const VISIBLE_TOOL_CALL_CORRECTION_MARKER = "[protocol-correction:visible_tool_call]";
+
+export interface AgentLoopOptions {
+  maxToolRounds?: number;
+}
+
+function normalizeMaxToolRounds(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    return null;
+  }
+
+  return Math.min(value, MAX_TOOL_ROUNDS_UPPER_BOUND);
+}
+
+function resolveMaxToolRounds(override?: number): number {
+  const fromOverride = normalizeMaxToolRounds(override);
+  if (fromOverride !== null) {
+    return fromOverride;
+  }
+
+  const raw = process.env[MAX_TOOL_ROUNDS_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_MAX_TOOL_ROUNDS;
+  }
+
+  const parsed = Number(raw);
+  return normalizeMaxToolRounds(parsed) ?? DEFAULT_MAX_TOOL_ROUNDS;
+}
 
 function failedToolMessage(result: string): string | null {
   try {
@@ -223,6 +252,7 @@ export class AgentLoop {
     private readonly contextCompressor = new ContextCompressor(modelRouter, sessions),
     private readonly hooks: AgentHookRegistry = createDefaultHookRegistry(),
     private readonly createTools: () => ToolRegistry = () => new ToolRegistry(),
+    private readonly options: AgentLoopOptions = {},
   ) {}
 
   async *execute(input: {
@@ -238,6 +268,7 @@ export class AgentLoop {
     signal: AbortSignal;
   }): AsyncGenerator<AgentEvent> {
     const tools = this.createTools();
+    const maxToolRounds = resolveMaxToolRounds(this.options.maxToolRounds);
     const permissionMode = input.permissionMode ?? "ask-on-write";
     const readFileState = new FileReadState();
     let lastRunStatusPollAt = 0;
@@ -404,7 +435,7 @@ export class AgentLoop {
     let protocolRecoveryAttempts = 0;
 
     try {
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      for (let round = 0; round < maxToolRounds; round += 1) {
         const roundAbort = await abortIfRequested(true);
         if (roundAbort) {
           yield roundAbort;
@@ -1010,7 +1041,7 @@ export class AgentLoop {
 
       const finalizerPostModelResponse = await this.hooks.runPostModelResponse({
         content: visibleAssistantText,
-        iteration: MAX_TOOL_ROUNDS + 1,
+        iteration: maxToolRounds + 1,
         runId: input.runId,
         sessionId: input.sessionId,
         toolCalls: [],
@@ -1063,7 +1094,7 @@ export class AgentLoop {
         runId: input.runId,
         sessionId: input.sessionId,
         success: true,
-        totalIterations: MAX_TOOL_ROUNDS + 1,
+        totalIterations: maxToolRounds + 1,
         userId: input.userId,
       });
       yield {

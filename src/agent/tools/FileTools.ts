@@ -343,13 +343,14 @@ export function createFileTools(): AgentTool[] {
     definition: {
       function: {
         description:
-          "Incrementally create or overwrite a large text file in the current session workspace without sending the entire file in one tool call. Use this for generated HTML/PPT/report artifacts or any file likely over 40 KB. Send chunks in order with sequence starting at 1; each chunk must be at most 64 KiB. Use sequence=1 to create/truncate the file, then sequence=2,3,... to append. Set final=true only on the last chunk to publish the downloadable artifact. Existing files must be read with read_file before sequence=1.",
+          "Incrementally create or overwrite a large text file in the current session workspace without sending the entire file in one tool call. Use this for generated HTML/PPT/report artifacts or any file likely over 40 KB. Send chunks in order with sequence starting at 1; each chunk must be at most 64 KiB. Prefer chunks close to that limit, while staying valid, so long files finish within the agent iteration budget. Use sequence=1 to create/truncate the file, then sequence=2,3,... to append. Set final=true only on the last chunk to publish the downloadable artifact. Existing files must be read with read_file before sequence=1.",
         name: "write_file_chunk",
         parameters: {
           additionalProperties: false,
           properties: {
             content: {
-              description: "Next text chunk to write. Keep each chunk under 64 KiB.",
+              description:
+                "Next text chunk to write. Keep each chunk under 64 KiB and prefer sizable chunks for large files.",
               type: "string",
             },
             expected_sha256: {

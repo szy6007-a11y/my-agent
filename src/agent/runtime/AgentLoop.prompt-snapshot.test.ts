@@ -256,6 +256,10 @@ test("AgentLoop finalizes without tools after tool round limit", async () => {
     modelRouter as unknown as ModelRouter,
     sessions as unknown as SessionRepository,
     new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    undefined,
+    { maxToolRounds: 6 },
   );
 
   const events = await drain(
