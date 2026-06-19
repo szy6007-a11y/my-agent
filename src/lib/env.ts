@@ -27,7 +27,7 @@ const serverEnvSchema = z.object({
   DEEPSEEK_API_KEY: z.string().min(1, "DEEPSEEK_API_KEY is required"),
   DEEPSEEK_BASE_URL: z.url().default("https://api.deepseek.com"),
   DEEPSEEK_CONTEXT_WINDOW_TOKENS: z.coerce.number().int().positive().default(64_000),
-  DEEPSEEK_MODEL_DEFAULT: z.string().default("deepseek-v4-flash"),
+  DEEPSEEK_MODEL_DEFAULT: z.string().default("deepseek-v4-pro"),
   DEEPSEEK_MODEL_PRO: z.string().default("deepseek-v4-pro"),
   DATABASE_URL: z.string().min(1).optional(),
   LANGFUSE_BASE_URL: z.url().default("https://cloud.langfuse.com"),
