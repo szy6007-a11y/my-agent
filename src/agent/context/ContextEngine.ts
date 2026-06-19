@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { PromptAssembler, type PromptAssembly } from "@/agent/context/PromptAssembler";
 import { isContextSummaryMessage } from "@/agent/context/ContextSummary";
 import type { AgentMessage, ContextSnapshot, ModelMessage } from "@/agent/runtime/types";
+import { stripTrustedRuntimeReminder } from "@/shared/runtime-reminder";
 
 function latestContextSummary(messages: AgentMessage[]): AgentMessage | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -39,13 +40,52 @@ function messagesAfterSummaryBoundary(
   return summaryIndex >= 0 ? messages.slice(summaryIndex + 1) : nonSummaryMessages;
 }
 
-function toModelMessage(message: AgentMessage): ModelMessage | null {
+function refreshModelLine(content: string, model: string | undefined): string {
+  if (!model) {
+    return content;
+  }
+
+  return content.replace(/^Model: .+$/m, `Model: ${model}`);
+}
+
+function refreshPromptSnapshotForRun(
+  snapshot: PromptAssembly,
+  input: { model?: string },
+): PromptAssembly {
+  if (!input.model) {
+    return snapshot;
+  }
+
+  return {
+    prompt: refreshModelLine(snapshot.prompt, input.model),
+    sections: snapshot.sections.map((section) =>
+      section.tag === "environment_context" ?
+        { ...section, content: refreshModelLine(section.content, input.model) }
+      : section,
+    ),
+    tiers: {
+      context: snapshot.tiers.context,
+      stable: snapshot.tiers.stable,
+      volatile: refreshModelLine(snapshot.tiers.volatile, input.model),
+    },
+  };
+}
+
+function toModelMessage(
+  message: AgentMessage,
+  input: { preserveTrustedRuntimeReminder?: boolean } = {},
+): ModelMessage | null {
   if (isContextSummaryMessage(message)) {
     return null;
   }
 
   if (message.role === "user") {
-    return message.content.trim() ? { role: "user", content: message.content } : null;
+    const content =
+      input.preserveTrustedRuntimeReminder ?
+        message.content
+      : stripTrustedRuntimeReminder(message.content);
+
+    return content.trim() ? { role: "user", content } : null;
   }
 
   if (message.role === "assistant") {
@@ -104,17 +144,24 @@ export class ContextEngine {
     model?: string;
     promptSnapshot?: PromptAssembly;
     provider?: string;
+    runtimeReminderMessageId?: string;
     sessionId?: string;
     userId?: string;
   }): ContextSnapshot {
     const summary = latestContextSummary(input.messages);
     const liveMessages = messagesAfterSummaryBoundary(input.messages, summary);
     const recentMessages = liveMessages
-      .map(toModelMessage)
+      .map((message) =>
+        toModelMessage(message, {
+          preserveTrustedRuntimeReminder: message.id === input.runtimeReminderMessageId,
+        }),
+      )
       .filter((message): message is ModelMessage => Boolean(message));
 
     const systemPrompt =
-      input.promptSnapshot ??
+      input.promptSnapshot ?
+        refreshPromptSnapshotForRun(input.promptSnapshot, { model: input.model })
+      :
       this.assemblePrompt({
         availableTools: input.availableTools,
         model: input.model,

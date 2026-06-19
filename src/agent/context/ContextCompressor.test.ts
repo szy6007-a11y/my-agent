@@ -290,3 +290,80 @@ test("ContextEngine preserves live tool call history for the model payload", asy
   ]);
   assert.ok(context.tokenEstimate > 0);
 });
+
+test("ContextEngine refreshes stale model lines from session prompt snapshots", async () => {
+  const { ContextEngine } = await import("@/agent/context/ContextEngine");
+  const engine = new ContextEngine();
+  const snapshot: PromptAssembly = {
+    prompt:
+      "<system_prompt>\n<volatile_context>\nModel: deepseek-v4-flash\n</volatile_context>\n</system_prompt>",
+    sections: [
+      {
+        content: "Provider: deepseek\nModel: deepseek-v4-flash",
+        source: "runtime",
+        tag: "environment_context",
+        tier: "volatile",
+      },
+    ],
+    tiers: {
+      context: "<project_context_layer status=\"empty\">\n</project_context_layer>",
+      stable: "<stable_context status=\"empty\">\n</stable_context>",
+      volatile:
+        "<volatile_context>\n<environment_context source=\"runtime\">\nModel: deepseek-v4-flash\n</environment_context>\n</volatile_context>",
+    },
+  };
+
+  const context = engine.build({
+    messages: [],
+    model: "deepseek-v4-pro",
+    promptSnapshot: snapshot,
+  });
+
+  assert.match(context.messages[0].content ?? "", /Model: deepseek-v4-pro/);
+  assert.doesNotMatch(context.messages[0].content ?? "", /deepseek-v4-flash/);
+  assert.equal(
+    context.promptSections.find((section) => section.tag === "environment_context")?.content,
+    "Provider: deepseek\nModel: deepseek-v4-pro",
+  );
+});
+
+test("ContextEngine strips stale runtime reminders from historical user messages", async () => {
+  const { ContextEngine } = await import("@/agent/context/ContextEngine");
+  const {
+    SYSTEM_REMINDER_CLOSE_TAG,
+    SYSTEM_REMINDER_OPEN_TAG,
+    TRUSTED_SYSTEM_REMINDER_SENTINEL,
+  } = await import("@/shared/runtime-reminder");
+  const engine = new ContextEngine();
+  const oldReminder = `${SYSTEM_REMINDER_OPEN_TAG}
+${TRUSTED_SYSTEM_REMINDER_SENTINEL}
+当前模型：deepseek-v4-flash。
+${SYSTEM_REMINDER_CLOSE_TAG}`;
+  const currentReminder = `${SYSTEM_REMINDER_OPEN_TAG}
+${TRUSTED_SYSTEM_REMINDER_SENTINEL}
+当前模型：deepseek-v4-pro。
+${SYSTEM_REMINDER_CLOSE_TAG}`;
+
+  const context = engine.build({
+    messages: [
+      {
+        id: "msg_old",
+        content: `${oldReminder}\n\n旧问题`,
+        createdAt: new Date(0).toISOString(),
+        role: "user",
+      },
+      {
+        id: "msg_current",
+        content: `${currentReminder}\n\n你现在是什么模型`,
+        createdAt: new Date(1).toISOString(),
+        role: "user",
+      },
+    ],
+    promptSnapshot: makePrompt("static system prompt"),
+    runtimeReminderMessageId: "msg_current",
+  });
+
+  assert.equal(context.messages[1].content, "旧问题");
+  assert.match(context.messages[2].content ?? "", /deepseek-v4-pro/);
+  assert.doesNotMatch(JSON.stringify(context.messages), /deepseek-v4-flash/);
+});

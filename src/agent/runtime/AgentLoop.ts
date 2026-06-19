@@ -318,6 +318,7 @@ export class AgentLoop {
       model: input.model,
       promptSnapshot,
       provider: "deepseek",
+      runtimeReminderMessageId: input.userMessageId,
       sessionId: input.sessionId,
       userId: input.userId,
       availableTools: tools.names,
