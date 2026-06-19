@@ -1005,6 +1005,14 @@ export function ChatWorkspace() {
           }
 
           if (event.type === "context.compacted") {
+            if (event.sessionId) {
+              const compactedSessionId = event.sessionId;
+              setSessionId(compactedSessionId);
+              setActiveRun((current) =>
+                current ? { ...current, sessionId: compactedSessionId } : current,
+              );
+              void refreshSessions();
+            }
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",

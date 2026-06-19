@@ -271,6 +271,7 @@ export class AgentLoop {
     const maxToolRounds = resolveMaxToolRounds(this.options.maxToolRounds);
     const permissionMode = input.permissionMode ?? "ask-on-write";
     const readFileState = new FileReadState();
+    let activeSessionId = input.sessionId;
     let toolIterations = 0;
     let lastRunStatusPollAt = 0;
     const scheduleBackgroundReview = () => {
@@ -278,7 +279,7 @@ export class AgentLoop {
         .maybeRun({
           model: input.model,
           runId: input.runId,
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           thinking: input.thinking,
           toolIterations,
           userId: input.userId,
@@ -313,7 +314,7 @@ export class AgentLoop {
     await this.sessions.updateRunStatus(input.runId, "streaming_model");
     yield { type: "run.started", runId: input.runId };
 
-    let history = await this.sessions.listMessages(input.sessionId, {
+    let history = await this.sessions.listMessages(activeSessionId, {
       limit: 180,
       userId: input.userId,
     });
@@ -325,7 +326,7 @@ export class AgentLoop {
       messages: history,
       model: input.model,
       runId: input.runId,
-      sessionId: input.sessionId,
+      sessionId: activeSessionId,
       toolNames: tools.names,
       userId: input.userId,
     });
@@ -334,7 +335,7 @@ export class AgentLoop {
       messages: history,
       model: input.model,
       runId: input.runId,
-      sessionId: input.sessionId,
+      sessionId: activeSessionId,
       targetMessageId: input.userMessageId,
       toolNames: tools.names,
       userId: input.userId,
@@ -344,7 +345,7 @@ export class AgentLoop {
       await this.sessions.updateMessageContent({
         content: reminder.targetMessage.content,
         messageId: reminder.targetMessage.id,
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         userId: input.userId,
       });
       history = reminder.messages;
@@ -359,11 +360,11 @@ export class AgentLoop {
       availableTools: tools.names,
       model: input.model,
       provider: "deepseek",
-      sessionId: input.sessionId,
+      sessionId: activeSessionId,
       userId: input.userId,
     });
     const storedPromptSnapshot = await this.sessions.getPromptSnapshot({
-      sessionId: input.sessionId,
+      sessionId: activeSessionId,
       userId: input.userId,
     });
     const promptSnapshot =
@@ -371,12 +372,12 @@ export class AgentLoop {
       : "savePromptSnapshot" in this.sessions &&
         typeof this.sessions.savePromptSnapshot === "function" ?
         await this.sessions.savePromptSnapshot({
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           snapshot: currentPromptSnapshot,
           userId: input.userId,
         })
       : await this.sessions.savePromptSnapshotIfAbsent({
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         snapshot: currentPromptSnapshot,
         userId: input.userId,
       });
@@ -386,7 +387,7 @@ export class AgentLoop {
         messages: history,
         model: input.model,
         runId: input.runId,
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         signal: input.signal,
         userId: input.userId,
       });
@@ -395,25 +396,35 @@ export class AgentLoop {
         await this.hooks.runPreCompact({
           reason: "proactive",
           runId: input.runId,
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           userId: input.userId,
         });
-        effectiveHistory = compression.messages;
         await this.sessions.updateRunStatus(input.runId, "compacting");
+        const rotation = await this.sessions.rotateSessionForCompression({
+          messages: compression.messages,
+          promptSnapshot,
+          runId: input.runId,
+          sessionId: activeSessionId,
+          userId: input.userId,
+        });
+        activeSessionId = rotation.session.id;
+        history = rotation.messages;
+        effectiveHistory = rotation.messages;
         yield {
           type: "context.compacted",
           afterTokenEstimate: compression.afterTokenEstimate,
           beforeTokenEstimate: compression.beforeTokenEstimate,
           compactedMessageCount: compression.compactedMessageCount,
           reason: "proactive",
-          summaryMessageId: compression.summaryMessageId,
+          sessionId: activeSessionId,
+          summaryMessageId: rotation.summaryMessageId ?? compression.summaryMessageId,
         };
         await this.hooks.runPostCompact({
           messagesCompacted: compression.compactedMessageCount,
-          messagesRetained: compression.messages.length - compression.compactedMessageCount,
+          messagesRetained: rotation.messages.length,
           reason: "proactive",
           runId: input.runId,
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           userId: input.userId,
         });
       }
@@ -433,7 +444,7 @@ export class AgentLoop {
       promptSnapshot,
       provider: "deepseek",
       runtimeReminderMessageId: input.userMessageId,
-      sessionId: input.sessionId,
+      sessionId: activeSessionId,
       userId: input.userId,
       availableTools: tools.names,
     });
@@ -485,7 +496,7 @@ export class AgentLoop {
           model: input.model,
           runId: input.runId,
           signal: input.signal,
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           thinking: input.thinking,
           tools: tools.definitions,
           userId: input.userId,
@@ -570,6 +581,9 @@ export class AgentLoop {
           }
 
           if (event.type === "usage") {
+            this.contextCompressor.updateFromResponse({
+              promptTokens: event.inputTokens,
+            });
             yield {
               type: "usage.updated",
               inputTokens: event.inputTokens,
@@ -607,7 +621,7 @@ export class AgentLoop {
                 await this.sessions.updateMessageContent({
                   content: correctedContent,
                   messageId: correctionTarget.id,
-                  sessionId: input.sessionId,
+                  sessionId: activeSessionId,
                   userId: input.userId,
                 });
               }
@@ -660,7 +674,7 @@ export class AgentLoop {
             content: visibleAssistantText,
             iteration: round + 1,
             runId: input.runId,
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             toolCalls: [],
             toolNames: tools.names,
             userId: input.userId,
@@ -692,14 +706,14 @@ export class AgentLoop {
             artifacts,
             content: visibleAssistantText,
             role: "assistant",
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
           });
 
           await this.sessions.updateRunStatus(input.runId, "completed");
           scheduleBackgroundReview();
           await this.hooks.runMessageEnd({
             runId: input.runId,
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             success: true,
             totalIterations: round + 1,
             userId: input.userId,
@@ -737,7 +751,7 @@ export class AgentLoop {
         await this.sessions.appendMessage({
           content: assistantToolContent,
           role: "assistant",
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           toolCalls,
         });
 
@@ -771,7 +785,7 @@ export class AgentLoop {
             permissionMode,
             risk,
             runId: input.runId,
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             userId: input.userId,
@@ -792,7 +806,7 @@ export class AgentLoop {
             readFileState,
             runId: input.runId,
             signal: input.signal,
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             sessions: this.sessions,
             userId: input.userId,
           };
@@ -839,7 +853,7 @@ export class AgentLoop {
                   request: approvalRequest,
                   risk: preparedRisk,
                   runId: input.runId,
-                  sessionId: input.sessionId,
+                  sessionId: activeSessionId,
                   toolCallId: prepared.toolCall.id,
                   toolName: prepared.toolCall.name,
                   userId: input.userId,
@@ -915,7 +929,7 @@ export class AgentLoop {
           await this.sessions.appendMessage({
             content: result,
             role: "tool",
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             toolCallId: effectiveToolCall.id,
             toolName: effectiveToolCall.name,
           });
@@ -926,7 +940,7 @@ export class AgentLoop {
             ok: !failure,
             output: result,
             runId: input.runId,
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             toolCallId: effectiveToolCall.id,
             toolName: effectiveToolCall.name,
             userId: input.userId,
@@ -993,7 +1007,7 @@ export class AgentLoop {
         model: input.model,
         runId: input.runId,
         signal: input.signal,
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         thinking: input.thinking,
         tools: [],
         userId: input.userId,
@@ -1023,6 +1037,9 @@ export class AgentLoop {
         }
 
         if (event.type === "usage") {
+          this.contextCompressor.updateFromResponse({
+            promptTokens: event.inputTokens,
+          });
           yield {
             type: "usage.updated",
             inputTokens: event.inputTokens,
@@ -1049,7 +1066,7 @@ export class AgentLoop {
         content: visibleAssistantText,
         iteration: maxToolRounds + 1,
         runId: input.runId,
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         toolCalls: [],
         toolNames: tools.names,
         userId: input.userId,
@@ -1082,13 +1099,13 @@ export class AgentLoop {
         artifacts,
         content: visibleAssistantText,
         role: "assistant",
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
       });
       await this.sessions.updateRunStatus(input.runId, "completed");
       scheduleBackgroundReview();
       await this.hooks.runMessageEnd({
         runId: input.runId,
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         success: true,
         totalIterations: maxToolRounds + 1,
         userId: input.userId,
@@ -1107,7 +1124,7 @@ export class AgentLoop {
 
       if (isContextOverflowError(error) && !input.reactiveCompactionAttempted) {
         await this.sessions.updateRunStatus(input.runId, "compacting");
-        const latestHistory = await this.sessions.listMessages(input.sessionId, {
+        const latestHistory = await this.sessions.listMessages(activeSessionId, {
           limit: 180,
           userId: input.userId,
         });
@@ -1120,7 +1137,7 @@ export class AgentLoop {
         await this.hooks.runPreCompact({
           reason: "reactive",
           runId: input.runId,
-          sessionId: input.sessionId,
+          sessionId: activeSessionId,
           userId: input.userId,
         });
 
@@ -1130,26 +1147,35 @@ export class AgentLoop {
             messages: latestHistory,
             model: input.model,
             runId: input.runId,
-            sessionId: input.sessionId,
+            sessionId: activeSessionId,
             signal: input.signal,
             userId: input.userId,
           });
 
           if (compression.compacted && compression.summaryMessageId) {
+            const rotation = await this.sessions.rotateSessionForCompression({
+              messages: compression.messages,
+              promptSnapshot,
+              runId: input.runId,
+              sessionId: activeSessionId,
+              userId: input.userId,
+            });
+            activeSessionId = rotation.session.id;
             yield {
               type: "context.compacted",
               afterTokenEstimate: compression.afterTokenEstimate,
               beforeTokenEstimate: compression.beforeTokenEstimate,
               compactedMessageCount: compression.compactedMessageCount,
               reason: "reactive",
-              summaryMessageId: compression.summaryMessageId,
+              sessionId: activeSessionId,
+              summaryMessageId: rotation.summaryMessageId ?? compression.summaryMessageId,
             };
             await this.hooks.runPostCompact({
               messagesCompacted: compression.compactedMessageCount,
-              messagesRetained: compression.messages.length - compression.compactedMessageCount,
+              messagesRetained: rotation.messages.length,
               reason: "reactive",
               runId: input.runId,
-              sessionId: input.sessionId,
+              sessionId: activeSessionId,
               userId: input.userId,
             });
             yield {
@@ -1162,6 +1188,7 @@ export class AgentLoop {
             for await (const retryEvent of this.execute({
               ...input,
               reactiveCompactionAttempted: true,
+              sessionId: activeSessionId,
             })) {
               if (retryEvent.type !== "run.started") {
                 yield retryEvent;
@@ -1179,7 +1206,7 @@ export class AgentLoop {
       await this.hooks.runMessageEnd({
         error,
         runId: input.runId,
-        sessionId: input.sessionId,
+        sessionId: activeSessionId,
         success: false,
         totalIterations: 0,
         userId: input.userId,

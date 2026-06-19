@@ -131,8 +131,11 @@ test("session_search browse excludes the active session and uses Hermes field na
   const sessions: StoredChatSession[] = [
     {
       createdAt: "2026-06-02T00:00:00.000Z",
+      endedAt: null,
+      endReason: null,
       id: "sess_old",
       messageCount: 8,
+      parentSessionId: null,
       status: "active",
       title: "旧会话",
       updatedAt: "2026-06-02T00:08:00.000Z",

@@ -4,7 +4,6 @@ import test from "node:test";
 import type { ModelStreamInput } from "@/agent/models/ProviderAdapter";
 import type { ModelRouter } from "@/agent/models/ModelRouter";
 import type { AgentMessage } from "@/agent/runtime/types";
-import type { SessionRepository } from "@/agent/sessions/SessionRepository";
 import type { PromptAssembly } from "@/agent/context/PromptAssembler";
 
 process.env.DEEPSEEK_API_KEY ??= "test-deepseek-key";
@@ -42,36 +41,16 @@ class FakeModelRouter {
   }
 }
 
-class FakeSessionRepository {
-  readonly appended: Array<{
-    content: string;
-    contentKind?: AgentMessage["contentKind"];
-    contextSummary?: AgentMessage["contextSummary"];
-    role: AgentMessage["role"];
-  }> = [];
-
-  async appendMessage(input: {
-    content: string;
-    contentKind?: AgentMessage["contentKind"];
-    contextSummary?: AgentMessage["contextSummary"];
-    role: AgentMessage["role"];
-  }): Promise<{ id: string }> {
-    this.appended.push(input);
-    return { id: `summary_${this.appended.length}` };
-  }
-}
-
-test("ContextCompressor appends a hidden reference-only summary", async () => {
+test("ContextCompressor returns Hermes-style active summary and tail messages", async () => {
   const [{ ContextCompressor }, { CONTEXT_SUMMARY_HEADING, CONTEXT_SUMMARY_KIND }] =
     await Promise.all([
       import("@/agent/context/ContextCompressor"),
       import("@/agent/context/ContextSummary"),
     ]);
   const modelRouter = new FakeModelRouter();
-  const sessions = new FakeSessionRepository();
   const compressor = new ContextCompressor(
     modelRouter as unknown as ModelRouter,
-    sessions as unknown as SessionRepository,
+    undefined,
     {
       contextWindowTokens: 100,
       minimumContextTokens: 1,
@@ -91,15 +70,18 @@ test("ContextCompressor appends a hidden reference-only summary", async () => {
 
   assert.equal(result.compacted, true);
   assert.equal(result.compactedMessageCount, 3);
-  assert.equal(sessions.appended.length, 1);
-  assert.equal(sessions.appended[0].contentKind, CONTEXT_SUMMARY_KIND);
-  assert.deepEqual(sessions.appended[0].contextSummary, {
+  assert.equal(result.messages.length, 4);
+  assert.equal(result.messages[0].contentKind, CONTEXT_SUMMARY_KIND);
+  assert.deepEqual(result.messages[0].contextSummary, {
     coveredMessageCount: 3,
     coveredUntilMessageId: "msg_3",
   });
-  assert.equal(sessions.appended[0].role, "user");
-  assert.ok(sessions.appended[0].content.startsWith(CONTEXT_SUMMARY_HEADING));
-  assert.equal(result.messages.at(-1)?.contentKind, CONTEXT_SUMMARY_KIND);
+  assert.equal(result.messages[0].role, "user");
+  assert.ok(result.messages[0].content.startsWith(CONTEXT_SUMMARY_HEADING));
+  assert.deepEqual(
+    result.messages.slice(1).map((message) => message.id),
+    ["msg_4", "msg_5", "msg_6"],
+  );
 });
 
 test("ContextCompressor folds the previous compacted summary into the next summary", async () => {
@@ -107,12 +89,11 @@ test("ContextCompressor folds the previous compacted summary into the next summa
     await Promise.all([
       import("@/agent/context/ContextCompressor"),
       import("@/agent/context/ContextSummary"),
-    ]);
+  ]);
   const modelRouter = new FakeModelRouter();
-  const sessions = new FakeSessionRepository();
   const compressor = new ContextCompressor(
     modelRouter as unknown as ModelRouter,
-    sessions as unknown as SessionRepository,
+    undefined,
     {
       contextWindowTokens: 100,
       minimumContextTokens: 1,
@@ -132,7 +113,7 @@ test("ContextCompressor folds the previous compacted summary into the next summa
     role: "user",
   };
 
-  await compressor.maybeCompress({
+  const result = await compressor.maybeCompress({
     messages: [
       previousSummary,
       ...Array.from({ length: 6 }, (_, index) => makeMessage(index + 1)),
@@ -144,8 +125,7 @@ test("ContextCompressor folds the previous compacted summary into the next summa
     userId: "usr_1",
   });
 
-  assert.equal(sessions.appended.length, 1);
-  assert.deepEqual(sessions.appended[0].contextSummary, {
+  assert.deepEqual(result.messages[0].contextSummary, {
     coveredMessageCount: 3,
     coveredUntilMessageId: "msg_3",
   });
@@ -158,10 +138,8 @@ test("ContextCompressor follows the Hermes threshold floor before compacting", a
     import("@/agent/context/ContextCompressor"),
   ]);
   const modelRouter = new FakeModelRouter();
-  const sessions = new FakeSessionRepository();
   const compressor = new ContextCompressor(
     modelRouter as unknown as ModelRouter,
-    sessions as unknown as SessionRepository,
   );
 
   const result = await compressor.maybeCompress({
@@ -177,7 +155,6 @@ test("ContextCompressor follows the Hermes threshold floor before compacting", a
 
   assert.equal(result.compacted, false);
   assert.equal(modelRouter.prompts.length, 0);
-  assert.equal(sessions.appended.length, 0);
 });
 
 test("ContextEngine includes latest compacted summary plus uncovered live messages", async () => {

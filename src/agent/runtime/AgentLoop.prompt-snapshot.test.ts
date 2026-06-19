@@ -109,8 +109,39 @@ class ToolNarrationThenFinalModelRouter {
   }
 }
 
+class ProactiveCompressionStub {
+  updateFromResponse(): void {
+    return;
+  }
+
+  async maybeCompress(input: { messages: AgentMessage[] }) {
+    const summary: AgentMessage = {
+      id: "summary_tmp",
+      content: "## Context Summary\nCompressed historical state.",
+      contentKind: "context_summary",
+      contextSummary: {
+        coveredMessageCount: Math.max(1, input.messages.length - 1),
+        coveredUntilMessageId: input.messages.at(-2)?.id ?? input.messages[0]?.id,
+      },
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    };
+
+    return {
+      afterTokenEstimate: 10,
+      beforeTokenEstimate: 100,
+      compacted: true,
+      compactedMessageCount: Math.max(1, input.messages.length - 1),
+      messages: [summary, ...input.messages.slice(-1)],
+      summaryMessageId: summary.id,
+    };
+  }
+}
+
 class FakeSessionRepository {
+  readonly appendCalls: Array<{ role: AgentMessage["role"]; sessionId: string }> = [];
   readonly messages: AgentMessage[] = [];
+  readonly rotations: Array<{ runId?: string; sessionId: string }> = [];
   readonly statuses: RunStatus[] = [];
   promptSnapshot: PromptAssembly | null = null;
   runStatus: RunStatus | null = null;
@@ -133,6 +164,13 @@ class FakeSessionRepository {
     return this.messages;
   }
 
+  async updateMessageContent(input: { content: string; messageId: string }): Promise<void> {
+    const message = this.messages.find((item) => item.id === input.messageId);
+    if (message) {
+      message.content = input.content;
+    }
+  }
+
   async updateRunStatus(_runId: string, status: RunStatus): Promise<void> {
     this.statuses.push(status);
   }
@@ -149,6 +187,7 @@ class FakeSessionRepository {
     toolCalls?: ModelToolCall[];
     toolName?: string;
   }): Promise<{ id: string }> {
+    this.appendCalls.push({ role: input.role, sessionId: input.sessionId });
     const message: AgentMessage = {
       id: `msg_${this.messages.length + 1}`,
       content: input.content,
@@ -160,6 +199,38 @@ class FakeSessionRepository {
     };
     this.messages.push(message);
     return { id: message.id };
+  }
+
+  async rotateSessionForCompression(input: {
+    messages: AgentMessage[];
+    runId?: string;
+    sessionId: string;
+  }) {
+    this.rotations.push({
+      runId: input.runId,
+      sessionId: input.sessionId,
+    });
+    const childMessages = input.messages.map((message, index) => ({
+      ...message,
+      id: `child_msg_${index + 1}`,
+    }));
+    this.messages.splice(0, this.messages.length, ...childMessages);
+
+    return {
+      messages: childMessages,
+      session: {
+        createdAt: new Date(0).toISOString(),
+        endedAt: null,
+        endReason: null,
+        id: "sess_child",
+        messageCount: childMessages.length,
+        parentSessionId: input.sessionId,
+        status: "active",
+        title: "child",
+        updatedAt: new Date(0).toISOString(),
+      },
+      summaryMessageId: childMessages[0]?.id ?? null,
+    };
   }
 }
 
@@ -239,6 +310,61 @@ test("AgentLoop freezes the session prompt snapshot across runs", async () => {
   assert.equal(promptAssembler.count, 2);
   assert.equal(sessions.savedSnapshots, 1);
   assert.deepEqual(modelRouter.systemPrompts, ["prompt-1", "prompt-1"]);
+});
+
+test("AgentLoop rotates to a compression child session before continuing the run", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const contextEngine = new ContextEngine({
+    assemble: () => makePrompt("compression-rotate-prompt"),
+  } as unknown as PromptAssembler);
+  const modelRouter = new FakeModelRouter();
+  const sessions = new FakeSessionRepository();
+  sessions.messages.push(
+    {
+      id: "msg_old",
+      content: "old history",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+    {
+      id: "msg_current",
+      content: "current turn",
+      createdAt: new Date(1).toISOString(),
+      role: "user",
+    },
+  );
+  const loop = new AgentLoop(
+    contextEngine,
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    new ProactiveCompressionStub() as never,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 128,
+      model: "deepseek-v4-flash",
+      runId: "run_rotate",
+      sessionId: "sess_parent",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+    }),
+  );
+  const compacted = events.find(
+    (event): event is Extract<AgentEvent, { type: "context.compacted" }> =>
+      event.type === "context.compacted",
+  );
+
+  assert.equal(compacted?.summaryMessageId, "child_msg_1");
+  assert.equal(compacted?.sessionId, "sess_child");
+  assert.deepEqual(sessions.rotations, [{ runId: "run_rotate", sessionId: "sess_parent" }]);
+  assert.equal(sessions.appendCalls.at(-1)?.role, "assistant");
+  assert.equal(sessions.appendCalls.at(-1)?.sessionId, "sess_child");
 });
 
 test("AgentLoop finalizes without tools after tool round limit", async () => {

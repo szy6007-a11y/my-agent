@@ -14,6 +14,10 @@ const HERMES_MINIMUM_CONTEXT_LENGTH = 64_000;
 const HERMES_PROTECT_LAST_N = 20;
 const HERMES_SUMMARY_TARGET_RATIO = 0.20;
 const HERMES_SUMMARY_TOKENS_CEILING = 12_000;
+const HERMES_MAX_INEFFECTIVE_COMPRESSIONS = 2;
+const HERMES_MIN_SAVINGS_RATIO = 0.10;
+const HERMES_OLD_TOOL_RESULT_CHAR_LIMIT = 200;
+const HERMES_TOOL_ARGUMENT_CHAR_LIMIT = 500;
 const MAX_TAIL_MESSAGE_FLOOR = 8;
 const MESSAGE_CONTENT_CHAR_LIMIT = 2_400;
 const TOOL_CONTENT_CHAR_LIMIT = 1_200;
@@ -32,6 +36,7 @@ type CompressionWindow = {
   coveredUntilMessageId: string;
   latestSummary: AgentMessage | null;
   summarizedMessages: AgentMessage[];
+  tailMessages: AgentMessage[];
 };
 
 export type ContextCompressionResult = {
@@ -178,12 +183,14 @@ function selectCompressionWindow(
     nonSummaryMessages.slice(coveredUntilIndex >= 0 ? coveredUntilIndex + 1 : 0);
   const tailStart = findTailStartByTokens(compressibleMessages, protectLastN, tailTokenBudget);
   const summarizedMessages = compressibleMessages.slice(0, tailStart);
+  const tailMessages = compressibleMessages.slice(tailStart);
   const coveredUntil = summarizedMessages[summarizedMessages.length - 1];
 
   return {
     coveredUntilMessageId: coveredUntil?.id ?? coveredUntilMessageId ?? "",
     latestSummary,
     summarizedMessages,
+    tailMessages,
   };
 }
 
@@ -240,26 +247,111 @@ function findTailStartByTokens(
   return cutIndex;
 }
 
-function estimateProjectedCompressedHistory(
-  messages: AgentMessage[],
-  protectLastN: number,
-): number {
-  let latestSummary: AgentMessage | null = null;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (isContextSummaryMessage(messages[index])) {
-      latestSummary = messages[index];
-      break;
+function cloneMessage(message: AgentMessage): AgentMessage {
+  return {
+    ...message,
+    artifacts: message.artifacts ? [...message.artifacts] : undefined,
+    contextSummary: message.contextSummary ? { ...message.contextSummary } : undefined,
+    toolCalls: message.toolCalls?.map((toolCall) => ({ ...toolCall })),
+  };
+}
+
+function compactOldToolResult(message: AgentMessage): AgentMessage {
+  return {
+    ...message,
+    content: `Tool result compacted during context compression. Original length: ${message.content.length} characters.
+
+Preview:
+${truncateForSummary(message.content, HERMES_OLD_TOOL_RESULT_CHAR_LIMIT)}`,
+  };
+}
+
+function truncateJsonStrings(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.length > HERMES_TOOL_ARGUMENT_CHAR_LIMIT ?
+        truncateForSummary(value, HERMES_TOOL_ARGUMENT_CHAR_LIMIT)
+      : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(truncateJsonStrings);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, truncateJsonStrings(item)]),
+    );
+  }
+
+  return value;
+}
+
+function truncateToolArguments(argumentsText: string): string {
+  if (argumentsText.length <= HERMES_TOOL_ARGUMENT_CHAR_LIMIT) {
+    return argumentsText;
+  }
+
+  try {
+    const parsed = JSON.parse(argumentsText) as unknown;
+    const compacted = JSON.stringify(truncateJsonStrings(parsed));
+
+    if (compacted.length <= argumentsText.length) {
+      return compacted;
+    }
+  } catch {
+    // Fall back to a textual preview below.
+  }
+
+  return truncateForSummary(argumentsText, HERMES_TOOL_ARGUMENT_CHAR_LIMIT);
+}
+
+function pruneOldToolPayloads(messages: AgentMessage[], protectLastN: number): AgentMessage[] {
+  const protectedFrom = Math.max(0, messages.length - protectLastN);
+  const seenToolResults = new Set<string>();
+  const pruned = messages.map(cloneMessage);
+
+  for (let index = pruned.length - 1; index >= 0; index -= 1) {
+    const message = pruned[index];
+    const protectedTail = index >= protectedFrom;
+
+    if (message.role === "tool") {
+      const duplicateKey = `${message.toolName ?? ""}:${message.content}`;
+      const duplicate = seenToolResults.has(duplicateKey);
+      seenToolResults.add(duplicateKey);
+
+      if (!protectedTail && duplicate) {
+        pruned[index] = {
+          ...message,
+          content:
+            "Older duplicate tool result omitted during context compression. The newest equivalent result is retained in the protected tail.",
+        };
+        continue;
+      }
+
+      if (!protectedTail && message.content.length > HERMES_OLD_TOOL_RESULT_CHAR_LIMIT) {
+        pruned[index] = compactOldToolResult(message);
+      }
+    }
+
+    if (!protectedTail && message.role === "assistant" && message.toolCalls?.length) {
+      pruned[index] = {
+        ...message,
+        toolCalls: message.toolCalls.map((toolCall) => ({
+          ...toolCall,
+          arguments: truncateToolArguments(toolCall.arguments),
+        })),
+      };
+    }
+
+    if (!protectedTail && message.artifacts?.length) {
+      pruned[index] = {
+        ...pruned[index],
+        artifacts: undefined,
+      };
     }
   }
 
-  const recentMessages = messages
-    .filter((message) => !isContextSummaryMessage(message) && message.content.trim())
-    .slice(-protectLastN);
-
-  return estimateAgentMessages([
-    ...(latestSummary ? [latestSummary] : []),
-    ...recentMessages,
-  ]);
+  return pruned;
 }
 
 export class ContextCompressor {
@@ -267,12 +359,17 @@ export class ContextCompressor {
   private readonly protectLastN: number;
   private readonly tailTokenBudget: number;
   private readonly thresholdTokens: number;
+  private awaitingRealUsageAfterCompression = false;
+  private ineffectiveCompressionCount = 0;
+  private lastCompressionRoughTokens = 0;
+  private lastPromptTokens = 0;
 
   constructor(
     private readonly modelRouter = new ModelRouter(),
-    private readonly sessions: SessionRepository = sessionRepository,
+    _sessions: SessionRepository = sessionRepository,
     options: CompressionOptions = {},
   ) {
+    void _sessions;
     const contextWindowTokens = options.contextWindowTokens ?? serverEnv.DEEPSEEK_CONTEXT_WINDOW_TOKENS;
     const thresholdPercent =
       options.thresholdPercent ?? serverEnv.CONTEXT_COMPRESSION_THRESHOLD_PERCENT;
@@ -312,12 +409,26 @@ export class ContextCompressor {
       messages: input.messages,
     };
 
+    if (
+      !input.force &&
+      this.awaitingRealUsageAfterCompression &&
+      this.shouldDeferPreflightToRealUsage(beforeTokenEstimate)
+    ) {
+      return unchanged;
+    }
+
     if (!input.force && beforeTokenEstimate < this.thresholdTokens) {
       return unchanged;
     }
 
-    const window = selectCompressionWindow(input.messages, this.protectLastN, this.tailTokenBudget);
+    if (!input.force && this.ineffectiveCompressionCount >= HERMES_MAX_INEFFECTIVE_COMPRESSIONS) {
+      return unchanged;
+    }
+
+    const prunedMessages = pruneOldToolPayloads(input.messages, this.protectLastN);
+    const window = selectCompressionWindow(prunedMessages, this.protectLastN, this.tailTokenBudget);
     if (window.summarizedMessages.length === 0) {
+      this.ineffectiveCompressionCount += 1;
       return unchanged;
     }
 
@@ -334,37 +445,63 @@ export class ContextCompressor {
     const coveredMessageCount =
       (window.latestSummary?.contextSummary?.coveredMessageCount ?? 0) +
       window.summarizedMessages.length;
-    const saved = await this.sessions.appendMessage({
-      content,
-      contentKind: CONTEXT_SUMMARY_KIND,
-      contextSummary: {
-        coveredMessageCount,
-        coveredUntilMessageId: window.coveredUntilMessageId,
-      },
-      role: "user",
-      sessionId: input.sessionId,
-    });
     const summaryMessage: AgentMessage = {
-      id: saved.id,
-      content,
+      id: `msg_${randomUUID()}`,
       contentKind: CONTEXT_SUMMARY_KIND,
+      content,
       contextSummary: {
         coveredMessageCount,
         coveredUntilMessageId: window.coveredUntilMessageId,
       },
-      createdAt: new Date().toISOString(),
       role: "user",
+      createdAt: new Date().toISOString(),
     };
-    const messages = [...input.messages, summaryMessage];
+    const messages = [summaryMessage, ...window.tailMessages];
+    const afterTokenEstimate = estimateAgentMessages(messages);
+    const savingsRatio =
+      beforeTokenEstimate > 0 ? (beforeTokenEstimate - afterTokenEstimate) / beforeTokenEstimate : 0;
+
+    if (savingsRatio < HERMES_MIN_SAVINGS_RATIO) {
+      this.ineffectiveCompressionCount += 1;
+    } else {
+      this.ineffectiveCompressionCount = 0;
+    }
+    this.lastCompressionRoughTokens = afterTokenEstimate;
+    this.lastPromptTokens = -1;
+    this.awaitingRealUsageAfterCompression = true;
 
     return {
-      afterTokenEstimate: estimateProjectedCompressedHistory(messages, this.protectLastN),
+      afterTokenEstimate,
       beforeTokenEstimate,
       compacted: true,
       compactedMessageCount: window.summarizedMessages.length,
       messages,
-      summaryMessageId: saved.id,
+      summaryMessageId: summaryMessage.id,
     };
+  }
+
+  updateFromResponse(input: { promptTokens?: number }): void {
+    if (!input.promptTokens || input.promptTokens <= 0) {
+      return;
+    }
+
+    this.lastPromptTokens = input.promptTokens;
+    this.awaitingRealUsageAfterCompression = false;
+  }
+
+  private shouldDeferPreflightToRealUsage(roughTokens: number): boolean {
+    if (this.lastPromptTokens === -1) {
+      return true;
+    }
+
+    if (this.lastPromptTokens <= 0) {
+      return false;
+    }
+
+    return (
+      this.lastPromptTokens < this.thresholdTokens &&
+      roughTokens <= Math.max(this.thresholdTokens, Math.floor(this.lastCompressionRoughTokens * 1.3))
+    );
   }
 
   private async generateSummary(input: {

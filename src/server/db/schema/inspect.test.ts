@@ -27,8 +27,11 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
 
   assert.deepEqual([...schema.get("sessions") ?? []].sort(), [
     "created_at",
+    "end_reason",
+    "ended_at",
     "environment",
     "id",
+    "parent_session_id",
     "prompt_snapshot_created_at",
     "prompt_snapshot_json",
     "status",
@@ -62,5 +65,5 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "tool_name",
     "user_id",
   ]);
-  assert.equal(REQUIRED_DATABASE_INDEXES.length, 18);
+  assert.equal(REQUIRED_DATABASE_INDEXES.length, 19);
 });

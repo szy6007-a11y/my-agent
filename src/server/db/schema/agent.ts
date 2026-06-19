@@ -5,6 +5,7 @@ import {
   index,
   integer,
   jsonb,
+  type AnyPgColumn,
   pgTable,
   text,
   timestamp,
@@ -18,6 +19,11 @@ export const sessions = pgTable(
     userId: text("user_id").notNull(),
     title: text("title").notNull(),
     status: text("status").notNull().default("active"),
+    parentSessionId: text("parent_session_id").references((): AnyPgColumn => sessions.id, {
+      onDelete: "set null",
+    }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endReason: text("end_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     promptSnapshotJson: jsonb("prompt_snapshot_json"),
@@ -29,6 +35,7 @@ export const sessions = pgTable(
       table.userId,
       table.updatedAt.desc(),
     ),
+    index("sessions_parent_idx").on(table.parentSessionId),
   ],
 );
 

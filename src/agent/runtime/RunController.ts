@@ -48,13 +48,21 @@ export class RunController {
     const thinking = request.thinking ?? "disabled";
     const maxTokens = request.maxTokens ?? 1024;
 
-    const session =
+    const requestedSession =
       request.sessionId ?
         await this.sessions.getSessionForUser(request.sessionId, userId)
       : await this.sessions.createSession({
           title: titleFromMessage(request.message),
           userId,
         });
+
+    const session =
+      requestedSession && request.sessionId ?
+        (await this.sessions.resolveCompressionHead({
+          sessionId: requestedSession.id,
+          userId,
+        })) ?? requestedSession
+      : requestedSession;
 
     if (!session) {
       throw new Error("Session not found");

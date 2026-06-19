@@ -25,10 +25,17 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
 
   const { sessionId } = await context.params;
-  const session = await sessionRepository.getSessionForUser(
+  const requestedSession = await sessionRepository.getSessionForUser(
     sessionId,
     auth.user.id,
   );
+  const session =
+    requestedSession ?
+      (await sessionRepository.resolveCompressionHead({
+        sessionId: requestedSession.id,
+        userId: auth.user.id,
+      })) ?? requestedSession
+    : null;
 
   if (!session) {
     return NextResponse.json(
@@ -40,7 +47,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     );
   }
 
-  const messages = await sessionRepository.listMessages(sessionId, {
+  const messages = await sessionRepository.listMessages(session.id, {
     limit: 120,
     userId: auth.user.id,
   });

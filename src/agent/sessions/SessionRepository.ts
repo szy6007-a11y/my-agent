@@ -64,9 +64,23 @@ type StoredSessionRow = {
   id: string;
   title: string;
   status: string;
+  parent_session_id: string | null;
+  ended_at: Date | null;
+  end_reason: string | null;
   created_at: Date;
   updated_at: Date;
   message_count: number;
+};
+
+type SessionLineageRow = {
+  id: string;
+  title: string;
+  status: string;
+  parent_session_id: string | null;
+  ended_at: Date | null;
+  end_reason: string | null;
+  created_at: Date;
+  updated_at: Date;
 };
 
 type PromptSnapshotRow = {
@@ -111,9 +125,18 @@ export type StoredChatSession = {
   id: string;
   title: string;
   status: string;
+  parentSessionId: string | null;
+  endedAt: string | null;
+  endReason: string | null;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+};
+
+export type CompressionSessionRotation = {
+  messages: AgentMessage[];
+  session: StoredChatSession;
+  summaryMessageId: string | null;
 };
 
 export type StoredAgentRun = {
@@ -209,6 +232,22 @@ function toJson(value: unknown): postgres.JSONValue {
   return JSON.parse(JSON.stringify(value)) as postgres.JSONValue;
 }
 
+function messageContentJson(input: {
+  artifacts?: AgentArtifact[];
+  content: string;
+  contentKind?: AgentMessageContentKind;
+  contextSummary?: ContextSummaryMetadata;
+  toolCalls?: ModelToolCall[];
+}) {
+  return {
+    ...(input.artifacts && input.artifacts.length > 0 ? { artifacts: input.artifacts } : {}),
+    ...(input.contentKind ? { kind: input.contentKind } : {}),
+    ...(input.contextSummary ? { summary: input.contextSummary } : {}),
+    text: input.content,
+    ...(input.toolCalls && input.toolCalls.length > 0 ? { toolCalls: input.toolCalls } : {}),
+  };
+}
+
 function isPromptAssembly(value: unknown): value is PromptAssembly {
   if (!value || typeof value !== "object") {
     return false;
@@ -266,6 +305,20 @@ function toStoredRun(row: StoredAgentRunRow): StoredAgentRun {
     endedAt: row.ended_at?.toISOString() ?? null,
     error: row.error_json,
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+function toStoredChatSession(row: StoredSessionRow | SessionLineageRow): StoredChatSession {
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    parentSessionId: row.parent_session_id,
+    endedAt: row.ended_at?.toISOString() ?? null,
+    endReason: row.end_reason,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    messageCount: "message_count" in row ? row.message_count : 0,
   };
 }
 
@@ -367,14 +420,37 @@ function roleFilterFlags(roles: AgentRole[] | undefined) {
 }
 
 export class SessionRepository {
-  async createSession(input: { userId: string; title: string }) {
+  async createSession(input: {
+    id?: string;
+    parentSessionId?: string | null;
+    promptSnapshot?: PromptAssembly;
+    title: string;
+    userId: string;
+  }) {
     await ready();
     const db = getSql();
-    const id = `sess_${randomUUID()}`;
+    const id = input.id ?? `sess_${randomUUID()}`;
+    const promptSnapshot = input.promptSnapshot;
 
     await db`
-      insert into sessions (id, environment, user_id, title)
-      values (${id}, ${serverEnv.APP_ENV}, ${input.userId}, ${input.title})
+      insert into sessions (
+        id,
+        environment,
+        user_id,
+        title,
+        parent_session_id,
+        prompt_snapshot_json,
+        prompt_snapshot_created_at
+      )
+      values (
+        ${id},
+        ${serverEnv.APP_ENV},
+        ${input.userId},
+        ${input.title},
+        ${input.parentSessionId ?? null},
+        ${promptSnapshot ? db.json(toJson(promptSnapshot)) : null},
+        ${promptSnapshot ? db`now()` : null}
+      )
     `;
 
     return { id };
@@ -393,6 +469,66 @@ export class SessionRepository {
     `;
 
     return rows[0] ?? null;
+  }
+
+  async resolveCompressionHead(input: {
+    sessionId: string;
+    userId: string;
+  }): Promise<{ id: string; title: string } | null> {
+    await ready();
+    const db = getSql();
+    let currentId = input.sessionId;
+    let current: { id: string; title: string; end_reason: string | null } | undefined;
+
+    for (let depth = 0; depth < 32; depth += 1) {
+      const rows = await db<Array<{ id: string; title: string; end_reason: string | null }>>`
+        select id, title, end_reason
+        from sessions
+        where id = ${currentId}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+        limit 1
+      `;
+      current = rows[0];
+
+      if (!current) {
+        return null;
+      }
+
+      if (current.end_reason !== "compression") {
+        return {
+          id: current.id,
+          title: current.title,
+        };
+      }
+
+      const childRows = await db<Array<{ id: string; title: string }>>`
+        select id, title
+        from sessions
+        where parent_session_id = ${current.id}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+        order by created_at desc, id desc
+        limit 1
+      `;
+      const child = childRows[0];
+
+      if (!child) {
+        return {
+          id: current.id,
+          title: current.title,
+        };
+      }
+
+      currentId = child.id;
+    }
+
+    return current ?
+        {
+          id: current.id,
+          title: current.title,
+        }
+      : null;
   }
 
   async getPromptSnapshot(input: {
@@ -480,6 +616,9 @@ export class SessionRepository {
         s.id,
         s.title,
         s.status,
+        s.parent_session_id,
+        s.ended_at,
+        s.end_reason,
         s.created_at,
         s.updated_at,
         count(m.id) filter (
@@ -489,6 +628,7 @@ export class SessionRepository {
       left join messages m on m.session_id = s.id
       where s.user_id = ${userId}
         and s.environment = ${serverEnv.APP_ENV}
+        and s.end_reason is null
         ${
           input.excludeSessionId ?
             db`and s.id <> ${input.excludeSessionId}`
@@ -499,14 +639,7 @@ export class SessionRepository {
       limit ${limit}
     `;
 
-    return rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      status: row.status,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
-      messageCount: row.message_count,
-    }));
+    return rows.map(toStoredChatSession);
   }
 
   async touchSession(sessionId: string, userId: string, title?: string) {
@@ -547,13 +680,7 @@ export class SessionRepository {
     await ready();
     const db = getSql();
     const id = `msg_${randomUUID()}`;
-    const contentJson = {
-      ...(input.artifacts && input.artifacts.length > 0 ? { artifacts: input.artifacts } : {}),
-      ...(input.contentKind ? { kind: input.contentKind } : {}),
-      ...(input.contextSummary ? { summary: input.contextSummary } : {}),
-      text: input.content,
-      ...(input.toolCalls && input.toolCalls.length > 0 ? { toolCalls: input.toolCalls } : {}),
-    };
+    const contentJson = messageContentJson(input);
 
     await db`
       insert into messages (id, session_id, role, content_json, tool_call_id, tool_name)
@@ -568,6 +695,157 @@ export class SessionRepository {
     `;
 
     return { id };
+  }
+
+  async rotateSessionForCompression(input: {
+    messages: AgentMessage[];
+    promptSnapshot?: PromptAssembly;
+    runId?: string;
+    sessionId: string;
+    userId: string;
+  }): Promise<CompressionSessionRotation> {
+    await ready();
+    const db = getSql();
+
+    if (input.messages.length === 0) {
+      throw new Error("Cannot rotate a compressed session without active messages");
+    }
+
+    return db.begin(async (tx) => {
+      const oldRows = await tx<SessionLineageRow[]>`
+        select
+          id,
+          title,
+          status,
+          parent_session_id,
+          ended_at,
+          end_reason,
+          created_at,
+          updated_at
+        from sessions
+        where id = ${input.sessionId}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+        limit 1
+        for update
+      `;
+      const oldSession = oldRows[0];
+
+      if (!oldSession) {
+        throw new Error("Session not found or not writable by user");
+      }
+
+      const childSessionId = `sess_${randomUUID()}`;
+      const childRows = await tx<SessionLineageRow[]>`
+        insert into sessions (
+          id,
+          environment,
+          user_id,
+          title,
+          status,
+          parent_session_id,
+          prompt_snapshot_json,
+          prompt_snapshot_created_at
+        )
+        values (
+          ${childSessionId},
+          ${serverEnv.APP_ENV},
+          ${input.userId},
+          ${oldSession.title},
+          'active',
+          ${oldSession.id},
+          ${input.promptSnapshot ? db.json(toJson(input.promptSnapshot)) : null},
+          ${input.promptSnapshot ? tx`now()` : null}
+        )
+        returning
+          id,
+          title,
+          status,
+          parent_session_id,
+          ended_at,
+          end_reason,
+          created_at,
+          updated_at
+      `;
+      const childSession = childRows[0];
+
+      if (!childSession) {
+        throw new Error("Compression child session could not be created");
+      }
+
+      await tx`
+        update sessions
+        set
+          status = 'ended',
+          ended_at = now(),
+          end_reason = 'compression',
+          updated_at = now()
+        where id = ${oldSession.id}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+      `;
+
+      if (input.runId) {
+        await tx`
+          update agent_runs
+          set session_id = ${childSession.id}
+          where id = ${input.runId}
+            and session_id = ${oldSession.id}
+            and user_id = ${input.userId}
+            and environment = ${serverEnv.APP_ENV}
+        `;
+        await tx`
+          update tool_approvals
+          set session_id = ${childSession.id}
+          where run_id = ${input.runId}
+            and session_id = ${oldSession.id}
+            and user_id = ${input.userId}
+            and environment = ${serverEnv.APP_ENV}
+        `;
+      }
+
+      const persistedMessages: AgentMessage[] = [];
+      let summaryMessageId: string | null = null;
+      const baseTimestamp = Date.now();
+
+      for (const [index, message] of input.messages.entries()) {
+        const id = `msg_${randomUUID()}`;
+        const createdAt = new Date(baseTimestamp + index);
+        const rows = await tx<StoredMessageRow[]>`
+          insert into messages (
+            id,
+            session_id,
+            role,
+            content_json,
+            tool_call_id,
+            tool_name,
+            created_at
+          )
+          values (
+            ${id},
+            ${childSession.id},
+            ${message.role},
+            ${db.json(toJson(messageContentJson(message)))},
+            ${message.toolCallId ?? null},
+            ${message.toolName ?? null},
+            ${createdAt}
+          )
+          returning id, role, content_json, tool_call_id, tool_name, created_at
+        `;
+        const persisted = toAgentMessage(rows[0]);
+        persistedMessages.push(persisted);
+
+        if (persisted.contentKind === CONTEXT_SUMMARY_KIND) {
+          summaryMessageId = persisted.id;
+        }
+      }
+
+      return {
+        messages: persistedMessages,
+        session: toStoredChatSession(childSession),
+        summaryMessageId,
+      };
+    });
   }
 
   async updateMessageContent(input: {

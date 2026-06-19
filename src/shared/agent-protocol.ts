@@ -86,6 +86,7 @@ export type AgentEvent =
       beforeTokenEstimate: number;
       compactedMessageCount: number;
       reason?: "proactive" | "reactive";
+      sessionId?: string;
       summaryMessageId: string;
     }
   | {

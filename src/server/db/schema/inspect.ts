@@ -15,6 +15,7 @@ export const REQUIRED_DATABASE_INDEXES = [
   "messages_session_created_idx",
   "run_events_run_created_idx",
   "sessions_environment_user_updated_idx",
+  "sessions_parent_idx",
   "installed_skills_env_user_slug_idx",
   "installed_skills_env_user_status_idx",
   "skill_audit_events_env_user_created_idx",
