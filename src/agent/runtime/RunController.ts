@@ -1,14 +1,30 @@
 import type {
   AgentEvent,
   AgentRunRequest,
+  RunQueueMode,
   SequencedAgentEvent,
 } from "@/agent/runtime/types";
+import { isTerminalRunStatus } from "@/agent/runtime/RunEvents";
 import { AgentLoop } from "@/agent/runtime/AgentLoop";
 import {
   sessionRepository,
+  type StoredAgentRun,
   type SessionRepository,
 } from "@/agent/sessions/SessionRepository";
 import { deepseekModels } from "@/lib/ai/deepseek";
+
+function terminalRunReason(run: StoredAgentRun) {
+  if (
+    run.error &&
+    typeof run.error === "object" &&
+    "reason" in run.error &&
+    typeof run.error.reason === "string"
+  ) {
+    return run.error.reason;
+  }
+
+  return run.status;
+}
 
 function titleFromMessage(message: string) {
   const title = message.trim().replace(/\s+/g, " ").slice(0, 32);
@@ -28,6 +44,7 @@ export class RunController {
   ): AsyncGenerator<SequencedAgentEvent> {
     const model = request.model ?? deepseekModels.default;
     const permissionMode = request.permissionMode ?? "ask-on-write";
+    const queueMode: RunQueueMode = request.queueMode ?? "followup";
     const thinking = request.thinking ?? "disabled";
     const maxTokens = request.maxTokens ?? 1024;
 
@@ -44,11 +61,13 @@ export class RunController {
     }
 
     await this.sessions.touchSession(session.id, userId);
-    const userMessage = await this.sessions.appendMessage({
-      content: request.message,
-      role: "user",
-      sessionId: session.id,
-    });
+    if (queueMode === "interrupt") {
+      await this.sessions.abortOpenRunsForSession({
+        reason: "interrupted_by_new_run",
+        sessionId: session.id,
+        userId,
+      });
+    }
 
     const run = await this.sessions.createRun({
       model,
@@ -57,7 +76,33 @@ export class RunController {
       userId,
     });
 
-    yield* this.emit(run.id, { type: "run.accepted", runId: run.id, sessionId: session.id });
+    yield* this.emit(run.id, {
+      type: "run.accepted",
+      queueMode,
+      runId: run.id,
+      sessionId: session.id,
+    });
+
+    const claimedRun = await this.sessions.waitForRunTurn({
+      runId: run.id,
+      signal,
+      userId,
+    });
+
+    if (isTerminalRunStatus(claimedRun.status)) {
+      yield* this.emit(run.id, {
+        type: "run.aborted",
+        runId: run.id,
+        reason: terminalRunReason(claimedRun),
+      });
+      return;
+    }
+
+    const userMessage = await this.sessions.appendMessage({
+      content: request.message,
+      role: "user",
+      sessionId: session.id,
+    });
 
     for await (const event of this.loop.execute({
       maxTokens,

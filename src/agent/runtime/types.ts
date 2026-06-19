@@ -10,6 +10,7 @@ export type {
   ModelToolCall,
   ModelToolDefinition,
   PermissionMode,
+  RunQueueMode,
   RunStatus,
   SequencedAgentEvent,
   ToolApprovalStatus,

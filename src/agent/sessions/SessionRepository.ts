@@ -179,6 +179,16 @@ export type ToolApprovalDecision = Extract<ToolApprovalStatus, "approved" | "rej
 
 const APPROVAL_POLL_INTERVAL_MS = 250;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+const RUN_TURN_POLL_INTERVAL_MS = 250;
+const ACTIVE_RUN_STATUSES_SQL = [
+  "preparing",
+  "streaming_model",
+  "waiting_approval",
+  "executing_tools",
+  "compacting",
+  "finalizing",
+];
+const TERMINAL_RUN_STATUSES_SQL = ["completed", "failed", "aborted", "expired"];
 
 async function ready() {
   await assertDatabaseMigrated();
@@ -864,6 +874,109 @@ export class SessionRepository {
     return isRunStatus(status) ? status : null;
   }
 
+  private async claimRunTurn(input: {
+    runId: string;
+    userId: string;
+  }): Promise<StoredAgentRun | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<StoredAgentRunRow[]>`
+      update agent_runs current_run
+      set
+        status = 'preparing',
+        started_at = coalesce(started_at, now())
+      where current_run.id = ${input.runId}
+        and current_run.user_id = ${input.userId}
+        and current_run.environment = ${serverEnv.APP_ENV}
+        and current_run.status = 'queued'
+        and not exists (
+          select 1
+          from agent_runs active_run
+          where active_run.environment = current_run.environment
+            and active_run.session_id = current_run.session_id
+            and active_run.status in ${db(ACTIVE_RUN_STATUSES_SQL)}
+        )
+        and not exists (
+          select 1
+          from agent_runs older_queued
+          where older_queued.environment = current_run.environment
+            and older_queued.session_id = current_run.session_id
+            and older_queued.status = 'queued'
+            and (
+              older_queued.created_at < current_run.created_at
+              or (
+                older_queued.created_at = current_run.created_at
+                and older_queued.id < current_run.id
+              )
+            )
+        )
+      returning
+        id,
+        session_id,
+        status,
+        model,
+        permission_mode,
+        started_at,
+        ended_at,
+        error_json,
+        created_at
+    `;
+
+    return rows[0] ? toStoredRun(rows[0]) : null;
+  }
+
+  async waitForRunTurn(input: {
+    runId: string;
+    signal: AbortSignal;
+    userId: string;
+  }): Promise<StoredAgentRun> {
+    while (true) {
+      if (input.signal.aborted) {
+        const aborted = await this.abortRunForUser({
+          reason: "client_aborted",
+          runId: input.runId,
+          userId: input.userId,
+        });
+
+        if (!aborted) {
+          throw new Error("Run not found or not writable by user");
+        }
+
+        return aborted;
+      }
+
+      const claimed = await this.claimRunTurn({
+        runId: input.runId,
+        userId: input.userId,
+      });
+
+      if (claimed) {
+        return claimed;
+      }
+
+      const current = await this.getRunForUser({
+        runId: input.runId,
+        userId: input.userId,
+      });
+
+      if (!current) {
+        throw new Error("Run not found or not writable by user");
+      }
+
+      if (isTerminalRunStatus(current.status)) {
+        return current;
+      }
+
+      try {
+        await sleep(RUN_TURN_POLL_INTERVAL_MS, undefined, { signal: input.signal });
+      } catch (error) {
+        if (!input.signal.aborted) {
+          throw error;
+        }
+      }
+    }
+  }
+
   async updateRunStatus(runId: string, status: RunStatus, error?: unknown) {
     await ready();
     const db = getSql();
@@ -1050,6 +1163,64 @@ export class SessionRepository {
       runId: input.runId,
       userId: input.userId,
     });
+  }
+
+  async abortOpenRunsForSession(input: {
+    reason?: string;
+    sessionId: string;
+    userId: string;
+  }): Promise<StoredAgentRun[]> {
+    await ready();
+    const db = getSql();
+    const reason = input.reason?.trim() || "interrupted_by_new_run";
+    const rows = await db<StoredAgentRunRow[]>`
+      update agent_runs
+      set
+        status = 'aborted',
+        ended_at = now(),
+        error_json = ${db.json(toJson({ reason }))}
+      where session_id = ${input.sessionId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+        and status not in ${db(TERMINAL_RUN_STATUSES_SQL)}
+      returning
+        id,
+        session_id,
+        status,
+        model,
+        permission_mode,
+        started_at,
+        ended_at,
+        error_json,
+        created_at
+    `;
+
+    if (rows.length > 0) {
+      await db`
+        update tool_approvals
+        set
+          status = 'expired',
+          decision_json = ${db.json(toJson({
+            decision: "expired",
+            reason: "Run was interrupted before approval resolved.",
+          }))},
+          resolved_at = now()
+        where session_id = ${input.sessionId}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+          and status = 'pending'
+      `;
+
+      for (const row of rows) {
+        await this.appendRunEvent(row.id, {
+          type: "run.aborted",
+          runId: row.id,
+          reason,
+        });
+      }
+    }
+
+    return rows.map(toStoredRun);
   }
 
   async createToolApproval(input: {

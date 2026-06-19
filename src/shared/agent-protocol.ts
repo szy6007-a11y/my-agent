@@ -49,6 +49,8 @@ export type ToolRisk = "read" | "write" | "external" | "destructive";
 
 export type ToolApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
+export type RunQueueMode = "followup" | "interrupt" | "steer" | "collect";
+
 export type ToolUiManifest = {
   description?: string;
   displayName: string;
@@ -59,7 +61,7 @@ export type ToolUiManifest = {
 };
 
 export type AgentEvent =
-  | { type: "run.accepted"; runId: string; sessionId: string }
+  | { type: "run.accepted"; queueMode?: RunQueueMode; runId: string; sessionId: string }
   | { type: "run.started"; runId: string }
   | { type: "context.built"; snapshotId: string; tokenEstimate: number }
   | { type: "system.reminder.persisted"; messageId: string; runId: string; sanitized: boolean }
@@ -163,6 +165,7 @@ export type AgentRunRequest = {
   message: string;
   model?: string;
   permissionMode?: PermissionMode;
+  queueMode?: RunQueueMode;
   thinking?: "enabled" | "disabled";
   maxTokens?: number;
 };
