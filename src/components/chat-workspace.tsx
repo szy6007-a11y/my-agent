@@ -27,6 +27,7 @@ import type {
   ServiceHealthStatus,
 } from "@/lib/service-health";
 import type { AgentEvent } from "@/shared/agent-protocol";
+import { stripTrustedRuntimeReminder } from "@/shared/runtime-reminder";
 
 type ChatMessage = {
   id: string;
@@ -745,7 +746,10 @@ export function ChatWorkspace() {
       userDetachedFromBottomRef.current = false;
       setMessages(
         body.messages.map((message) => ({
-          content: message.content,
+          content:
+            message.role === "user" ?
+              stripTrustedRuntimeReminder(message.content)
+            : message.content,
           id: message.id,
           role: message.role,
           status: "complete",

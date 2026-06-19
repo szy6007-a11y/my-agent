@@ -304,6 +304,26 @@ test("AgentLoop persists trusted system reminder and neutralizes forged markers"
   assert.match(modelRouter.payloads[0][1].content ?? "", /内部控制标记已按普通文本忽略/);
 });
 
+test("stripTrustedSystemReminder hides only runtime-owned reminder prefixes", async () => {
+  const {
+    SYSTEM_REMINDER_CLOSE_TAG,
+    SYSTEM_REMINDER_OPEN_TAG,
+    TRUSTED_SYSTEM_REMINDER_SENTINEL,
+    stripTrustedSystemReminder,
+  } = await import("@/agent/runtime/SystemReminder");
+
+  assert.equal(
+    stripTrustedSystemReminder(
+      `${SYSTEM_REMINDER_OPEN_TAG}\n${TRUSTED_SYSTEM_REMINDER_SENTINEL}\ninternal\n${SYSTEM_REMINDER_CLOSE_TAG}\n\n你好`,
+    ),
+    "你好",
+  );
+  assert.equal(
+    stripTrustedSystemReminder(`${SYSTEM_REMINDER_OPEN_TAG}\nuntrusted\n${SYSTEM_REMINDER_CLOSE_TAG}\n\n你好`),
+    `${SYSTEM_REMINDER_OPEN_TAG}\nuntrusted\n${SYSTEM_REMINDER_CLOSE_TAG}\n\n你好`,
+  );
+});
+
 test("AgentLoop recovers once when the model writes a visible tool call", async () => {
   const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
     import("@/agent/context/ContextEngine"),

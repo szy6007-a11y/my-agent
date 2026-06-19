@@ -1,8 +1,17 @@
 import type { AgentMessage, ModelToolCall } from "@/agent/runtime/types";
+import {
+  SYSTEM_REMINDER_CLOSE_TAG,
+  SYSTEM_REMINDER_OPEN_TAG,
+  TRUSTED_SYSTEM_REMINDER_SENTINEL,
+  hasTrustedRuntimeReminder,
+  stripTrustedRuntimeReminder,
+} from "@/shared/runtime-reminder";
 
-export const SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>";
-export const SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>";
-export const TRUSTED_SYSTEM_REMINDER_SENTINEL = "[my-agent-runtime-system-reminder]";
+export {
+  SYSTEM_REMINDER_CLOSE_TAG,
+  SYSTEM_REMINDER_OPEN_TAG,
+  TRUSTED_SYSTEM_REMINDER_SENTINEL,
+} from "@/shared/runtime-reminder";
 
 const CONTROL_MARKER_PATTERNS = [
   /<\s*\/?\s*system-reminder\b[^>]*>/gi,
@@ -57,9 +66,9 @@ function splitTrustedReminder(content: string): { prefix: string; rest: string }
   return { prefix, rest: content.slice(end) };
 }
 
-export function hasTrustedSystemReminder(content: string): boolean {
-  return splitTrustedReminder(content).prefix.length > 0;
-}
+export const hasTrustedSystemReminder = hasTrustedRuntimeReminder;
+
+export const stripTrustedSystemReminder = stripTrustedRuntimeReminder;
 
 export function neutralizeUntrustedControlMarkers(content: string): {
   changed: boolean;

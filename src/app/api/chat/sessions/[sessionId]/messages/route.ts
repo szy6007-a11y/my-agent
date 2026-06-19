@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isContextSummaryMessage } from "@/agent/context/ContextSummary";
 import { sessionRepository } from "@/agent/sessions/SessionRepository";
 import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
+import { stripTrustedRuntimeReminder } from "@/shared/runtime-reminder";
 
 export const runtime = "nodejs";
 
@@ -46,12 +47,20 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
   return NextResponse.json({
     environment: getAuthEnvironment(),
-    messages: messages.filter(
-      (message) =>
-        !isContextSummaryMessage(message) &&
-        (message.role === "user" ||
-          (message.role === "assistant" && !message.toolCalls?.length)),
-    ),
+    messages: messages
+      .filter(
+        (message) =>
+          !isContextSummaryMessage(message) &&
+          (message.role === "user" ||
+            (message.role === "assistant" && !message.toolCalls?.length)),
+      )
+      .map((message) => ({
+        ...message,
+        content:
+          message.role === "user" ?
+            stripTrustedRuntimeReminder(message.content)
+          : message.content,
+      })),
     session,
   });
 }
