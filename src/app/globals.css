@@ -1258,7 +1258,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   transition: transform 160ms ease;
 }
 
-.task-panel.expanded .task-panel-toggle svg {
+.task-panel.collapsed .task-panel-toggle svg {
   transform: rotate(180deg);
 }
 
