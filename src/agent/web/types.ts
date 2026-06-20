@@ -25,8 +25,17 @@ export type GitHubRepositoryMetadata = {
   updated_at: string;
 };
 
+export type WebSearchResultEvidence = {
+  note: string;
+  retrieved_at: string;
+  source: "provider_search_result";
+  type: "search_snippet";
+  verified: false;
+};
+
 export type WebSearchResult = {
   description: string;
+  evidence?: WebSearchResultEvidence;
   metadata?: {
     github?: GitHubRepositoryMetadata;
   };

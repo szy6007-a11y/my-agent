@@ -65,15 +65,20 @@ test("web_search tool is advertised and returns provider-normalized sources", as
   const result = JSON.parse(
     await registry.execute(makeToolCall("web_search", { query: "agent search", limit: 1 }), makeContext()),
   ) as {
-    data: { web: Array<{ title: string; url: string }> };
+    data: { web: Array<{ evidence?: { type: string; verified: boolean }; title: string; url: string }> };
     provider: string;
     sources: Array<{ title: string; url: string }>;
     success: boolean;
+    verification: { exact_numeric_answer: string; search_snippets_verified: boolean };
   };
 
   assert.equal(result.success, true);
   assert.equal(result.provider, "tavily");
   assert.deepEqual(result.sources, [{ title: "Result", url: "https://example.com/result" }]);
+  assert.equal(result.data.web[0]?.evidence?.type, "search_snippet");
+  assert.equal(result.data.web[0]?.evidence?.verified, false);
+  assert.equal(result.verification.search_snippets_verified, false);
+  assert.equal(result.verification.exact_numeric_answer, "not_verified_from_search_snippets");
 });
 
 test("web_search enriches GitHub repository results with live star counts", async () => {
@@ -134,12 +139,15 @@ test("web_search enriches GitHub repository results with live star counts", asyn
     ) as {
       data: { web: Array<{ metadata?: { github?: { stars?: number } } }> };
       github_repositories: Array<{ full_name: string; source: string; stars: number }>;
+      verification: { exact_numeric_answer: string; verified_numeric_fields: string[] };
     };
 
     assert.equal(result.data.web[0]?.metadata?.github?.stars, 31979);
     assert.equal(result.github_repositories[0]?.full_name, "anthropics/financial-services");
     assert.equal(result.github_repositories[0]?.source, "github_rest_api");
     assert.equal(result.github_repositories[0]?.stars, 31979);
+    assert.equal(result.verification.exact_numeric_answer, "verified_structured_fields_available");
+    assert.ok(result.verification.verified_numeric_fields.includes("github_repositories.stars"));
   } finally {
     globalThis.fetch = previousFetch;
     if (previousEnrichLimit === undefined) {
@@ -193,7 +201,13 @@ test("web_search falls back to ddgs when firecrawl fails", async () => {
   const result = JSON.parse(
     await registry.execute(makeToolCall("web_search", { query: "agent search", limit: 1 }), makeContext()),
   ) as {
-    fallback: { from: string; reason: string };
+    fallback: {
+      evidence_quality: string;
+      from: string;
+      numeric_verification: string;
+      reason: string;
+      to: string;
+    };
     provider: string;
     sources: Array<{ title: string; url: string }>;
     success: boolean;
@@ -202,10 +216,64 @@ test("web_search falls back to ddgs when firecrawl fails", async () => {
   assert.equal(result.success, true);
   assert.equal(result.provider, "ddgs");
   assert.deepEqual(result.fallback, {
+    evidence_quality: "search_snippet_only",
     from: "firecrawl",
+    numeric_verification: "not_verified_from_search_snippets",
     reason: "FIRECRAWL_API_KEY or FIRECRAWL_API_URL is not set.",
+    to: "ddgs",
   });
   assert.deepEqual(result.sources, [{ title: "Duck", url: "https://example.com/duck" }]);
+});
+
+test("web_search marks stale numeric snippets as unverified rather than exact answers", async () => {
+  const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
+  const fakeProvider: WebSearchProvider = {
+    displayName: "DuckDuckGo (ddgs)",
+    isAvailable: () => true,
+    name: "ddgs",
+    search: async (query) => ({
+      data: {
+        web: [
+          {
+            description:
+              "The average closing price for the S&P 500 this year is $7,025.11. The latest price is $7,493.74.",
+            position: 1,
+            title: "S And P 500 Close By Day In 2026 | StatMuse Money",
+            url: "https://www.statmuse.com/money/ask/s-and-p-500-close-by-day-in-2026",
+          },
+        ],
+      },
+      provider: "ddgs",
+      query,
+      success: true,
+    }),
+    supportsExtract: () => false,
+    supportsSearch: () => true,
+  };
+  const registry = new ToolRegistry(createWebTools(new WebSearchRegistry([fakeProvider])));
+
+  const result = JSON.parse(
+    await registry.execute(
+      makeToolCall("web_search", { query: "搜索今天的标普500收盘价" }),
+      makeContext(),
+    ),
+  ) as {
+    citations: string;
+    data: { web: Array<{ evidence?: { note: string; type: string; verified: boolean } }> };
+    verification: {
+      exact_numeric_answer: string;
+      search_snippets_verified: boolean;
+      verified_numeric_fields: string[];
+    };
+  };
+
+  assert.equal(result.data.web[0]?.evidence?.type, "search_snippet");
+  assert.equal(result.data.web[0]?.evidence?.verified, false);
+  assert.match(result.data.web[0]?.evidence?.note ?? "", /not verified page content/);
+  assert.equal(result.verification.exact_numeric_answer, "not_verified_from_search_snippets");
+  assert.equal(result.verification.search_snippets_verified, false);
+  assert.deepEqual(result.verification.verified_numeric_fields, []);
+  assert.match(result.citations, /Do not use numeric values from snippets as exact current facts/);
 });
 
 test("web_extract blocks private and secret-bearing URLs before provider execution", async () => {

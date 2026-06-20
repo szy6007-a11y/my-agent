@@ -18,7 +18,11 @@ import type { WebExtractDocument } from "@/agent/web/types";
 import { validateExternalUrl } from "@/agent/web/urlSafety";
 import type { AgentTool, ToolExecutionContext } from "@/agent/tools/types";
 import { toolError, toolSuccess } from "@/agent/tools/types";
-import type { GitHubRepositoryMetadata, WebSearchResponse } from "@/agent/web/types";
+import type {
+  GitHubRepositoryMetadata,
+  WebSearchResponse,
+  WebSearchResult,
+} from "@/agent/web/types";
 
 type WebSearchArgs = {
   allowed_domains?: unknown;
@@ -33,6 +37,14 @@ type WebExtractArgs = {
   min_length?: unknown;
   urls?: unknown;
   use_llm_processing?: unknown;
+};
+
+type WebSearchFallbackInfo = {
+  evidence_quality: "search_snippet_only";
+  from: string;
+  numeric_verification: "not_verified_from_search_snippets";
+  reason: string;
+  to?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -70,27 +82,64 @@ function asFormat(value: unknown): "html" | "markdown" | "text" {
 
 function formatSearchResult(
   result: WebSearchResponse,
-  fallback?: { from: string; reason: string },
+  fallback?: WebSearchFallbackInfo,
 ): string {
   if (!result.success) {
     return JSON.stringify(fallback ? { ...result, fallback } : result);
   }
 
-  const githubRepositories = result.data.web
+  const retrievedAt = new Date().toISOString();
+  const web = annotateSearchSnippetEvidence(result.data.web, retrievedAt);
+  const githubRepositories = web
     .map((item) => item.metadata?.github)
     .filter((item): item is GitHubRepositoryMetadata => Boolean(item));
+  const verifiedNumericFields =
+    githubRepositories.length > 0 ?
+      ["github_repositories.stars", "github_repositories.forks", "github_repositories.open_issues"]
+    : [];
+  const exactNumericAnswerStatus =
+    verifiedNumericFields.length > 0 ?
+      "verified_structured_fields_available"
+    : "not_verified_from_search_snippets";
 
   return JSON.stringify({
     ...result,
+    data: {
+      ...result.data,
+      web,
+    },
     ...(fallback ? { fallback } : {}),
     ...(githubRepositories.length > 0 ? { github_repositories: githubRepositories } : {}),
     citations:
-      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. For GitHub repository star/fork counts, use data.web[].metadata.github or github_repositories only; do not infer current counts from search snippets.",
-    sources: result.data.web.map((item) => ({
+      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. data.web[].description is an unverified search snippet, not page content or a structured field. Do not use numeric values from snippets as exact current facts. Use only verified structured fields listed in verification.verified_numeric_fields, official page/API fields retrieved separately, or cross-verified sources for exact volatile numbers.",
+    sources: web.map((item) => ({
       title: item.title,
       url: item.url,
     })),
+    verification: {
+      exact_numeric_answer: exactNumericAnswerStatus,
+      guidance:
+        "Search snippets can contain stale, ambiguous, or SEO-generated numbers. Exact volatile numeric answers require verified structured metadata, extracted official page/API fields, or cross-verification.",
+      search_snippets_verified: false,
+      verified_numeric_fields: verifiedNumericFields,
+    },
   });
+}
+
+function annotateSearchSnippetEvidence(
+  results: WebSearchResult[],
+  retrievedAt: string,
+): WebSearchResult[] {
+  return results.map((result) => ({
+    ...result,
+    evidence: result.evidence ?? {
+      note: "Provider search result description/snippet only; not verified page content.",
+      retrieved_at: retrievedAt,
+      source: "provider_search_result",
+      type: "search_snippet",
+      verified: false,
+    },
+  }));
 }
 
 async function enrichSearchResult(result: WebSearchResponse, context: ToolExecutionContext) {
@@ -150,7 +199,7 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
     definition: {
       function: {
         description:
-          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, and a citation reminder. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
+          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, per-result evidence metadata, top-level verification guidance, and a citation reminder. data.web[].description is a provider search snippet and is not verified page content. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
         name: "web_search",
         parameters: {
           properties: {
@@ -219,7 +268,13 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
             await fallbackProvider.search(query, limit, options),
             context,
           );
-          const fallback = { from: provider.name, reason: result.error };
+          const fallback: WebSearchFallbackInfo = {
+            evidence_quality: "search_snippet_only",
+            from: provider.name,
+            numeric_verification: "not_verified_from_search_snippets",
+            reason: result.error,
+            to: fallbackProvider.name,
+          };
           if (fallbackResult.success) {
             return formatSearchResult(fallbackResult, fallback);
           }
@@ -227,7 +282,7 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
             error: `${result.error} Fallback ${fallbackProvider.name} also failed: ${fallbackResult.error}`,
             provider: provider.name,
             success: false,
-          });
+          }, fallback);
         }
         return formatSearchResult(result);
       }
