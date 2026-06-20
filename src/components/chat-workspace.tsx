@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  ArrowUp,
   Check,
   ChevronDown,
   CircleStop,
@@ -10,13 +11,10 @@ import {
   FileText,
   LogOut,
   Library,
-  Mic,
   MoreHorizontal,
-  Paperclip,
   PanelsLeftBottom,
   Plus,
   Search,
-  Send,
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -123,7 +121,7 @@ type ServiceLogEvent = {
 };
 
 const MAX_CONSOLE_LOGS = 28;
-const COMPOSER_TEXTAREA_MAX_HEIGHT = 96;
+const COMPOSER_TEXTAREA_MAX_HEIGHT = 120;
 const SCROLL_BOTTOM_FALLBACK_THRESHOLD = 96;
 const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px -96px 0px";
 
@@ -2541,9 +2539,6 @@ export function ChatWorkspace() {
           )}
 
           <form className="composer" onSubmit={submit}>
-            <button className="icon-button" type="button" aria-label="添加附件">
-              <Paperclip size={19} />
-            </button>
             <textarea
               aria-label="消息"
               onChange={(event) => setInput(event.target.value)}
@@ -2563,26 +2558,31 @@ export function ChatWorkspace() {
               rows={1}
               value={input}
             />
-            <button className="mode-button" type="button">
-              DeepSeek
-            </button>
-            <button className="icon-button" type="button" aria-label="语音输入">
-              <Mic size={18} />
-            </button>
-            {isStreaming ? (
-              <button
-                aria-label="停止"
-                className="send-button"
-                onClick={() => void stopStreaming()}
-                type="button"
-              >
-                <CircleStop size={19} />
+            <div className="composer-toolbar">
+              <button className="composer-add-button" type="button" aria-label="添加附件">
+                <Plus size={20} />
               </button>
-            ) : (
-              <button className="send-button" type="submit" aria-label="发送">
-                <Send size={18} />
-              </button>
-            )}
+              <div className="composer-actions">
+                <button className="mode-button" type="button">
+                  <span>Pro</span>
+                  <ChevronDown size={14} />
+                </button>
+                {isStreaming ? (
+                  <button
+                    aria-label="停止"
+                    className="send-button"
+                    onClick={() => void stopStreaming()}
+                    type="button"
+                  >
+                    <CircleStop size={19} />
+                  </button>
+                ) : (
+                  <button className="send-button" type="submit" aria-label="发送">
+                    <ArrowUp size={20} />
+                  </button>
+                )}
+              </div>
+            </div>
           </form>
         </div>
       </section>

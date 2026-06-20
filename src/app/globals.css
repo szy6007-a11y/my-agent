@@ -1761,23 +1761,22 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .composer {
-  display: flex;
+  display: grid;
   width: 100%;
-  align-items: flex-end;
-  min-height: 52px;
-  gap: 8px;
+  align-items: stretch;
+  gap: 10px;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: 24px;
   background: #ffffff;
   box-shadow: var(--shadow);
-  padding: 8px 10px;
+  padding: 14px 10px 8px 18px;
 }
 
 .composer textarea {
   display: block;
+  width: 100%;
   min-height: 24px;
-  max-height: 96px;
-  flex: 1;
+  max-height: 120px;
   resize: none;
   border: 0;
   outline: 0;
@@ -1790,6 +1789,35 @@ body > button[aria-label="Open Next.js Dev Tools"],
   scrollbar-color: #c6c6c6 transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
+}
+
+.composer-toolbar {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-add-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  background: transparent;
+  color: #1f2937;
+}
+
+.composer-add-button:hover {
+  background: var(--muted-strong);
 }
 
 .composer textarea::-webkit-scrollbar {
@@ -1819,15 +1847,20 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
 .mode-button {
   height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex: 0 0 auto;
   border-radius: 999px;
   background: transparent;
   color: var(--text-muted);
-  padding: 0 8px;
+  padding: 0 7px;
   font-size: 13px;
 }
 
 .send-button {
+  width: 36px;
+  height: 36px;
   background: #0f0f0f;
   color: #ffffff;
 }
