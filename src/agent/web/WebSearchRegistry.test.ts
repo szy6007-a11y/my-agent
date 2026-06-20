@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { WebSearchRegistry } from "@/agent/web/WebSearchRegistry";
+import {
+  DEFAULT_WEB_SEARCH_LIMIT,
+  DEFAULT_WEB_TIMEOUT_MS,
+  configuredWebSearchLimit,
+  configuredWebTimeoutMs,
+} from "@/agent/web/env";
 import type { WebProviderName, WebSearchProvider } from "@/agent/web/types";
 
 function provider(input: {
@@ -68,5 +74,15 @@ test("WebSearchRegistry does not enable extract for search-only providers", () =
 
     assert.equal(registry.getActiveProvider("extract"), null);
     assert.equal(registry.hasEnabledTool("extract"), false);
+  });
+});
+
+test("web integer env helpers use defaults for missing or empty values", () => {
+  withEnv("WEB_SEARCH_DEFAULT_LIMIT", undefined, () => {
+    assert.equal(configuredWebSearchLimit(), DEFAULT_WEB_SEARCH_LIMIT);
+  });
+
+  withEnv("WEB_SEARCH_TIMEOUT_MS", "", () => {
+    assert.equal(configuredWebTimeoutMs(), DEFAULT_WEB_TIMEOUT_MS);
   });
 });

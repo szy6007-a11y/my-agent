@@ -23,17 +23,21 @@
 - Agent 模型参数应通过统一适配层管理：复杂任务优先通过 `thinking.type` 与 `reasoning_effort` 等能力开关控制，不要把 provider 私有字段散落在页面层、业务路由或工具实现里。
 - DeepSeek API 是无状态的；会话、消息、runs、tool history、摘要和审计日志应由应用侧持久化并作为事实源，不能把 provider 响应当成唯一状态来源。
 - 流式交互 MVP 以 SSE 为默认实现；只有在设计文档明确要求的场景下，才引入 WebSocket、Realtime 或额外实时协议。
-- 涉及流式输出时，前后端之间应传递统一事件而不是透传 provider 原始 chunk。事件契约的当前 source of truth 是 `src/shared/agent-protocol.ts`；`AGENTS.md` 中不要再维护一套过时的事件枚举。MVP 以 SSE 为主，事件至少应覆盖 `run.accepted`、`run.started`、`assistant.delta`、`reasoning.delta`、`tool.started`、`tool.approval.required`、`tool.confirmation.required`、`tool.completed`、`tool.failed`、`usage.updated`、`run.completed`、`run.failed` 和 `run.aborted`，并支持基于 `seq` / `lastEventId` 的断线补读。
+- 涉及流式输出时，前后端之间应传递统一事件而不是透传 provider 原始 chunk。事件契约的当前 source of truth 是 `src/shared/agent-protocol.ts`，前后端都应复用其中类型；`AGENTS.md` 中不要再维护一套过时的事件枚举。MVP 以 SSE 为主，并支持基于 `seq` / `lastEventId` 的断线补读。
 - 所有工具执行必须走应用后端：模型只负责产出 tool call，服务端负责 schema 校验、策略检查、审批、执行、审计和结果回填。
 - 工具调度遵循后端架构文档：读类工具可并发，写类工具串行；文件写入前先读取当前内容，并校验 mtime 或等价版本信号，避免覆盖用户或格式化器刚写入的改动。
+- 大文件或长文档生成遵循产品 prompt 与工具题库约定：预计超过约 40KB 的完整文件优先走 `write_file_chunk`，从 `sequence=1` 顺序追加，最后一块设置 `final=true`；不要用单次 `write_file` 承载大体量内容。
 - 工具权限遵循最小权限原则：读操作默认允许；写操作、删除、支付、发信或其他高风险副作用必须走用户确认流。
 - 工具输出、网页内容、文件内容和外部 API 返回都应视为不可信上下文；进入模型前要保留注入防护和必要标注。
+- 调整模型可见工具、工具触发策略、Skill/Memory 工具或写类审批行为时，同步参考 `docs/TOOL_TRIGGER_QUESTION_BANK.md`，并保持测试题库与默认 `ToolRegistry` 能力一致。
 - 上下文工程应优先保持稳定 prompt、项目规则和长期上下文的顺序一致，以配合 DeepSeek context caching；不要随意重排固定前缀。Context Engine 的分层以设计文档为准，至少区分 `stable`、`workspace`、`skills`、`memory`、`history`、`retrieved` 和 `ephemeral`；其中 system prompt 只注入技能索引，完整技能按需通过运行时能力加载。
+- 大工具输出不应直接塞回模型上下文，应优先 artifact 化，只回传摘要、预览和路径；涉及上下文构建、裁剪或压缩时，应保留 `ContextSnapshot` 或等价调试信息，便于成本分析和回归评测。
 - 聊天兼容入口可以保留在 `/api/chat/*`，但当前后端 API 设计的主路径以 `/api/agent/runs`、`/api/agent/sessions`、`/api/agent/approvals` 和对应事件流接口为准；新增后端能力优先落在这组 `/api/agent/*` 路由。
+- GitHub Skill 安装、启用、禁用和本地 `skill_manage` / `manage_skill` 属于受治理能力：远端内容先进入安装提案或用户作用域 active skills，完整正文仍需按需加载；用户安装的 Skill、支持文件、脚本和模板都按不可信上下文处理，不能覆盖 system prompt、提升权限或绕过审批。
 - 会话并发控制以后端运行为准：同一 session 同时只允许一个 active run。会话队列模式沿用设计文档术语 `steer`、`followup`、`interrupt`、`collect`；MVP 默认 `followup`，编码场景按需扩展 `interrupt`。
 - 知识库/RAG 默认路线以 Supabase Postgres + pgvector 为先，数据模型保留 `knowledge_bases`、`documents`、`document_chunks` 等抽象；只有在规模或召回复杂度明确超出默认路线时，再引入 Qdrant、Weaviate 或 Milvus。
 - 长任务、索引、重试与恢复应通过应用侧队列/工作流抽象承载；MVP 优先保持 Inngest 或 Trigger.dev 兼容边界，复杂编排再评估 Temporal，而不是在页面层或临时脚本里直接拼后台流程。
-- 观测与评测属于默认工程基线：新增或调整 Agent 行为、prompt、tools、RAG 或权限策略时，应同步考虑 Langfuse + OpenTelemetry 埋点，以及 Promptfoo 回归覆盖，而不是只做手工验证。
+- 观测、评测与版本治理属于默认工程基线：新增或调整 Agent 行为、prompt、tools、RAG 或权限策略时，应同步考虑 Langfuse + OpenTelemetry 埋点、Promptfoo 回归覆盖，以及 review、rollback 和 traceability，而不是只做手工验证。
 
 ## 环境分支流程
 

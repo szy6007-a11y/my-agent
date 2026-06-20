@@ -1,4 +1,4 @@
-# ChatGPT-like Web Agent PRD
+# ChatGPT-like Web Agent 产品需求文档（PRD）
 
 调研日期：2026-06-17  
 目标版本：MVP v0.1  
@@ -118,7 +118,7 @@ DeepSeek 官方：
   - 上传文件到对象存储。
   - 为会话或项目创建知识库索引。
   - Agent 通过应用侧 `search_knowledge` 工具检索 pgvector/Qdrant/Weaviate，并返回来源。
-- Web Search：
+- 联网搜索：
   - 用户可选择“自动/开启/关闭联网搜索”。
   - Agent 通过应用侧 `web_search` 工具调用 Tavily、Exa、Brave Search、SerpAPI 或自建搜索服务。
   - 联网回答展示来源。
@@ -181,7 +181,7 @@ DeepSeek 官方：
 
 ## 7. 后端 Agent 能力拆解
 
-### 7.1 Agent Runtime
+### 7.1 Agent Runtime（运行时）
 
 - Agent 定义：名称、说明、system/developer 指令、默认模型、可用工具、输出格式。
 - 模型调用：DeepSeek `/chat/completions`。官方文档在 2026-06-17 显示当前模型为 `deepseek-v4-flash` 与 `deepseek-v4-pro`；`deepseek-chat` 与 `deepseek-reasoner` 将在 2026-07-24 15:59 UTC 废弃。MVP 默认 `deepseek-v4-flash`，复杂任务/高质量模式使用 `deepseek-v4-pro`。
@@ -199,7 +199,7 @@ DeepSeek 官方：
 - DeepSeek Function Tools：通过 Chat Completions `tools` 参数暴露工具 schema；模型只返回 tool call，具体执行由应用后端完成。
 - 应用侧工具：业务 API、数据库查询、CRM、联网搜索、RAG 检索、计算、格式转换、代码沙箱等。
 - MCP tools：后续通过应用侧 MCP gateway 接入 Google Drive、GitHub、Notion、Slack 等外部工具，再包装成 DeepSeek function tools。
-- Tool policy：
+- Tool 策略：
   - 工具必须有 schema、描述、权限级别、超时、重试、审计。
   - 读操作默认允许；写操作、支付、发邮件、删除数据等必须用户确认。
   - 工具输出视为不可信上下文，进入模型前做内容标注和注入防护。
@@ -280,7 +280,7 @@ MVP 默认选择 Supabase pgvector；数据模型保留 `knowledge_bases`、`doc
 
 ## 10. API 草案
 
-### 10.1 Chat
+### 10.1 聊天
 
 - `POST /api/chat/runs`
   - 输入：`conversationId?`、`projectId?`、`messages`、`attachments`、`modelMode`、`toolsMode`
@@ -293,7 +293,7 @@ MVP 默认选择 Supabase pgvector；数据模型保留 `knowledge_bases`、`doc
 - `POST /api/messages/:messageId/retry`
   - 从指定消息重新生成。
 
-### 10.2 Conversation
+### 10.2 会话
 
 - `GET /api/conversations`
 - `POST /api/conversations`
@@ -301,7 +301,7 @@ MVP 默认选择 Supabase pgvector；数据模型保留 `knowledge_bases`、`doc
 - `DELETE /api/conversations/:id`
 - `GET /api/conversations/search?q=...`
 
-### 10.3 Files and Knowledge
+### 10.3 文件与知识库
 
 - `POST /api/files/presign`
 - `POST /api/files/complete`
@@ -309,7 +309,7 @@ MVP 默认选择 Supabase pgvector；数据模型保留 `knowledge_bases`、`doc
 - `POST /api/knowledge-bases/:id/documents`
 - `GET /api/knowledge-bases/:id/documents`
 
-### 10.4 Tools and Agents
+### 10.4 Tools 与 Agents
 
 - `GET /api/agents`
 - `POST /api/agents`
@@ -356,7 +356,7 @@ MVP 默认选择 Supabase pgvector；数据模型保留 `knowledge_bases`、`doc
 - 接入 Auth、Postgres、基础 UI Shell。
 - 建立 lint/test/format/CI。
 
-### Sprint 1：Chat MVP
+### Sprint 1：聊天 MVP
 
 - 会话 CRUD。
 - Composer 与消息流。
@@ -366,7 +366,7 @@ MVP 默认选择 Supabase pgvector；数据模型保留 `knowledge_bases`、`doc
 
 ### Sprint 2：Agent 工具与 RAG
 
-- web search。
+- web search（联网搜索）。
 - 文件上传、解析、embedding、pgvector 检索。
 - 工具状态 UI。
 - 基础工具审计。

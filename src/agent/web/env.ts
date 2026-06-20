@@ -38,7 +38,11 @@ export function envFlag(name: string, fallback = false): boolean {
 }
 
 export function envInt(name: string, fallback: number, min: number, max: number): number {
-  const parsed = Number(envValue(name));
+  const raw = envValue(name);
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
   if (!Number.isFinite(parsed)) {
     return fallback;
   }

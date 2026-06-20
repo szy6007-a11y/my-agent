@@ -1,4 +1,4 @@
-# Claude Code-like Agent Backend Architecture
+# Claude Code-like Agent 后端架构
 
 设计日期：2026-06-17  
 目标版本：MVP v0.1  
@@ -240,7 +240,7 @@ my-agent/
 
 MVP 可以先不创建全部文件，但模块边界应按这个方向保持。
 
-## 6. Agent Loop
+## 6. Agent Loop（执行循环）
 
 ### 6.1 执行流程
 
@@ -359,7 +359,7 @@ MVP 默认：
 - `ModelRouter`：根据 agent 配置选择 primary/fallback，失败时按错误类型切换。
 - 模型特殊参数只能在 adapter 内处理，Agent Loop 不直接依赖 provider 私有字段。
 
-## 8. Context Engine
+## 8. Context Engine（上下文引擎）
 
 Context Engine 决定模型看到的全部内容。建议分层：
 
@@ -410,13 +410,13 @@ MVP 需要三层保护：
 
 | 项 | 默认 |
 | --- | --- |
-| auto compaction threshold | 70% context window |
+| 自动压缩阈值 | context window 的 70% |
 | protected recent messages | 最近 20 条或最近 20% token |
-| max tool result inline chars | 20,000 |
-| max turns per run | 50 |
-| max tool calls per run | 100 |
+| 工具结果最大内联字符数 | 20,000 |
+| 每个 run 最大轮数 | 50 |
+| 每个 run 最大工具调用数 | 100 |
 
-## 10. Tool Runtime
+## 10. Tool Runtime（工具运行时）
 
 ### 10.1 Tool 接口
 
@@ -447,7 +447,7 @@ interface ToolDefinition<Input, Output> {
 1. schema 校验。
 2. 输入规范化，比如路径展开、cwd 限制、shell 命令解析。
 3. 工具级 validate。
-4. permission policy。
+4. 权限策略。
 5. 执行。
 6. 输出裁剪、artifact 化、审计。
 
@@ -547,7 +547,7 @@ interface SandboxAdapter {
 - Docker 是第一优先级；SSH/远程沙箱作为 P1/P2。
 - 沙箱 workspace 和宿主 workspace 的同步策略要明确：host-canonical、remote-canonical 或 mirror。
 
-## 13. Session Store
+## 13. Session Store（会话存储）
 
 Web 产品建议用 Postgres；本地 CLI-only 可用 SQLite。Postgres 表建议：
 
@@ -608,7 +608,7 @@ type AgentEvent =
 
 ## 15. Skills、MCP 与插件
 
-### Skills
+### Skills（技能）
 
 技能是轻量 procedural memory：
 
@@ -636,7 +636,7 @@ Agent 自我改进循环参考 Hermes 的 background review：
 - `skill_manage` 支持 `create`、`edit`、`patch`、`write_file`、`remove_file`。写入必须进入用户作用域 active skills 目录，并同步记录 `installed_skills`、`skill_versions`、`skill_files` 与 `skill_audit_events`。
 - 前台调用 `skill_manage` 仍按写操作走审批；后台 review 使用受限工具集直接写入，但 prompt 明确禁止保存任务进度、临时错误、密钥、一次性叙事和删除 skill。
 
-### MCP
+### MCP（模型上下文协议）
 
 MCP Gateway 负责：
 

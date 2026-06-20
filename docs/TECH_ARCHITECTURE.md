@@ -1,64 +1,64 @@
-# Technical Architecture Diagram
+# 技术架构图
 
 调研日期：2026-06-17  
 目标：ChatGPT-like Web Agent，前端仿 ChatGPT 信息架构，后端封装 DeepSeek API Key、自研 Agent Loop、工具、知识库与安全治理。
 
 补充：面向“仿 Claude Code”的 Agent 后端运行时设计见 [AGENT_BACKEND_ARCHITECTURE.md](./AGENT_BACKEND_ARCHITECTURE.md)。
 
-## Recommended Architecture
+## 推荐架构
 
 ```mermaid
 flowchart LR
-  User["User Browser"]
+  User["用户浏览器"]
 
-  subgraph FE["Frontend: Next.js App Router + React + TypeScript"]
-    Shell["ChatGPT-like App Shell<br/>Sidebar / Chat Area / Composer"]
-    ChatUI["Streaming Chat UI<br/>Markdown / Code / Citations / Tool Status"]
-    UploadUI["Attachment & File Upload UI"]
-    ProjectUI["Projects / Library / Search"]
+  subgraph FE["前端：Next.js App Router + React + TypeScript"]
+    Shell["ChatGPT-like 应用外壳<br/>侧栏 / 对话区 / Composer"]
+    ChatUI["流式聊天 UI<br/>Markdown / 代码 / 引用 / 工具状态"]
+    UploadUI["附件与文件上传 UI"]
+    ProjectUI["项目 / 库 / 搜索"]
   end
 
-  subgraph BFF["Backend for Frontend: Next.js Route Handlers"]
-    Auth["Auth Middleware<br/>Auth.js or Supabase Auth"]
-    ChatAPI["POST /api/chat/runs<br/>SSE Stream Adapter"]
-    ConvAPI["Conversation / Project / Agent APIs"]
-    FileAPI["File Upload / Knowledge APIs"]
-    Policy["Rate Limit / Quota / Tool Policy"]
+  subgraph BFF["Backend for Frontend：Next.js Route Handlers"]
+    Auth["认证中间件<br/>Auth.js 或 Supabase Auth"]
+    ChatAPI["POST /api/chat/runs<br/>SSE 流适配器"]
+    ConvAPI["会话 / 项目 / Agent APIs"]
+    FileAPI["文件上传 / 知识库 APIs"]
+    Policy["限流 / 配额 / Tool 策略"]
   end
 
-  subgraph Agent["Agent Backend: Custom TypeScript Agent Loop"]
-    Runtime["Agent Runtime<br/>Instructions / Model Config / State Builder"]
-    Loop["Tool Calling Loop<br/>max iterations / retry / abort"]
-    ToolRouter["Tool Router<br/>Function Tools / MCP Gateway / Approvals"]
-    Guardrails["Guardrails & Human Review"]
-    StreamMap["DeepSeek SSE Chunks -> UI Events"]
+  subgraph Agent["Agent 后端：自研 TypeScript Agent Loop"]
+    Runtime["Agent Runtime<br/>指令 / 模型配置 / 状态构建器"]
+    Loop["Tool Calling Loop<br/>最大迭代 / 重试 / 中止"]
+    ToolRouter["Tool Router<br/>Function Tools / MCP Gateway / 审批"]
+    Guardrails["Guardrails 与人工复核"]
+    StreamMap["DeepSeek SSE Chunks -> UI 事件"]
   end
 
-  subgraph DeepSeek["DeepSeek Platform"]
+  subgraph DeepSeek["DeepSeek 平台"]
     ChatCompletions["/chat/completions<br/>deepseek-v4-flash / deepseek-v4-pro"]
     Capabilities["Streaming / Tool Calls / JSON Output<br/>Thinking Mode / Context Caching"]
   end
 
-  subgraph Tools["Application-side Tools"]
-    WebSearch["Web Search Tool<br/>Tavily / Exa / Brave / SerpAPI / self-hosted"]
-    KnowledgeTool["Knowledge Search Tool<br/>pgvector / Qdrant / Weaviate"]
-    BusinessTools["Business Function Tools<br/>Internal APIs / DB / CRM"]
-    Sandbox["Optional Sandbox<br/>Code / data processing"]
-    MCP["Optional MCP Gateway<br/>Drive / GitHub / Notion / Slack"]
+  subgraph Tools["应用侧 Tools"]
+    WebSearch["Web Search Tool<br/>Tavily / Exa / Brave / SerpAPI / 自建"]
+    KnowledgeTool["知识检索 Tool<br/>pgvector / Qdrant / Weaviate"]
+    BusinessTools["业务 Function Tools<br/>内部 APIs / DB / CRM"]
+    Sandbox["可选 Sandbox<br/>代码 / 数据处理"]
+    MCP["可选 MCP Gateway<br/>Drive / GitHub / Notion / Slack"]
   end
 
-  subgraph Data["Data Plane"]
-    Postgres["Postgres<br/>Users / Conversations / Messages / Runs / Audit"]
-    ObjectStore["Object Storage<br/>Attachments / Exports / Artifacts"]
-    Vector["Vector Index<br/>Supabase pgvector first"]
-    Redis["Redis or Durable Store<br/>Locks / Rate Limits / Short-lived State"]
+  subgraph Data["数据平面"]
+    Postgres["Postgres<br/>用户 / 会话 / 消息 / Runs / 审计"]
+    ObjectStore["对象存储<br/>附件 / 导出 / Artifacts"]
+    Vector["向量索引<br/>优先 Supabase pgvector"]
+    Redis["Redis 或 Durable Store<br/>锁 / 限流 / 短期状态"]
   end
 
-  subgraph Async["Async & Operations"]
+  subgraph Async["异步与运维"]
     Jobs["Durable Jobs<br/>Inngest / Trigger.dev / Temporal"]
-    Observability["Langfuse + OpenTelemetry<br/>Trace / Cost / Latency / Eval Scores"]
-    Evals["Promptfoo CI<br/>Regression / Red Team / RAG Quality"]
-    Alerts["Monitoring & Alerts"]
+    Observability["Langfuse + OpenTelemetry<br/>Trace / 成本 / 延迟 / 评测分数"]
+    Evals["Promptfoo CI<br/>回归 / Red Team / RAG 质量"]
+    Alerts["监控与告警"]
   end
 
   User --> Shell
@@ -106,84 +106,84 @@ flowchart LR
   Evals --> Runtime
 ```
 
-## Runtime Flow
+## 运行流程
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant U as User
+  participant U as 用户
   participant UI as Web UI
   participant API as /api/chat/runs
-  participant AG as Custom Agent Loop
+  participant AG as 自研 Agent Loop
   participant DS as DeepSeek Chat Completions
   participant DB as Postgres
   participant TO as App Tools/RAG/MCP
   participant OBS as Langfuse/OpenTelemetry
 
-  U->>UI: Send prompt with optional files/project
-  UI->>API: POST run request
-  API->>DB: Create conversation/message/run
-  API->>AG: Start agent run with user/session policy
-  AG->>DB: Load history, summaries, project prompts, tool policy
-  AG->>OBS: Create trace/span
-  AG->>DS: Stream /chat/completions with messages and tools
-  DS-->>AG: content delta or tool_call delta
-  alt model requests tool
-    AG->>TO: Execute allowed tool after policy checks
-    TO-->>AG: Tool result + citations/artifacts
-    AG->>DB: Persist tool call and tool message
-    AG->>DS: Continue /chat/completions with appended tool message
+  U->>UI: 发送 prompt，可附带文件/项目
+  UI->>API: POST run 请求
+  API->>DB: 创建 conversation/message/run
+  API->>AG: 按用户/session 策略启动 agent run
+  AG->>DB: 加载历史、摘要、项目 prompt、tool 策略
+  AG->>OBS: 创建 trace/span
+  AG->>DS: 携带 messages 与 tools 流式调用 /chat/completions
+  DS-->>AG: content delta 或 tool_call delta
+  alt 模型请求 tool
+    AG->>TO: 策略检查后执行允许的 tool
+    TO-->>AG: Tool 结果 + 引用/artifacts
+    AG->>DB: 持久化 tool call 和 tool message
+    AG->>DS: 追加 tool message 后继续调用 /chat/completions
   end
-  AG->>DB: Persist assistant deltas and final status
-  AG-->>API: Normalized UI stream events
+  AG->>DB: 持久化 assistant deltas 和最终状态
+  AG-->>API: 标准化 UI 流事件
   API-->>UI: SSE message.delta/tool/citation/usage/completed
-  UI-->>U: Render streaming answer
-  AG->>OBS: Record latency/tokens/cache/cost/errors
+  UI-->>U: 渲染流式回答
+  AG->>OBS: 记录延迟/token/cache/成本/错误
 ```
 
-## Module Boundaries
+## 模块边界
 
-| Module | Responsibility | Recommended Implementation |
+| 模块 | 职责 | 推荐实现 |
 | --- | --- | --- |
-| App Shell | ChatGPT-like layout, navigation, responsive shell | Next.js, React, Tailwind, Radix/shadcn, lucide-react |
-| Chat Runtime UI | Streaming messages, tool states, citations, retry/stop | Custom components plus assistant-ui or Vercel AI SDK patterns |
-| BFF/API | Auth, tenant checks, SSE, key protection, request shaping | Next.js Route Handlers; extract later if needed |
-| Agent Runtime | State building, model routing, tool loop, max-iteration control | Custom TypeScript Agent Loop |
-| Model Layer | DeepSeek model calls, streaming chunks, thinking mode, JSON output | DeepSeek `/chat/completions`; `@ai-sdk/deepseek` or `openai` client with DeepSeek base URL |
-| Tool Layer | Function tools, MCP gateway, approvals, audit | Typed tool registry + zod/json schema + policy engine |
-| Knowledge Layer | File parsing, chunking, embedding, retrieval, citations | Supabase pgvector first; Qdrant/Weaviate/Milvus later |
-| Web Search Layer | Fresh web lookup with citations | Tavily/Exa/Brave Search/SerpAPI or self-hosted crawler/search |
-| Persistence | Conversations, messages, runs, tool calls, audit | Postgres |
-| Async Jobs | Long reports, indexing, retries, notifications | Inngest/Trigger.dev for MVP; Temporal for complex scale |
-| Observability | Trace, token/cost, cache hit, errors, feedback | Langfuse + OpenTelemetry |
-| Evaluation | Regression, red team, RAG eval | Promptfoo in CI |
+| App Shell | ChatGPT-like 布局、导航、响应式外壳 | Next.js、React、Tailwind、Radix/shadcn、lucide-react |
+| Chat Runtime UI | 流式消息、tool 状态、引用、重试/停止 | 自研组件，参考 assistant-ui 或 Vercel AI SDK 模式 |
+| BFF/API | Auth、租户检查、SSE、密钥保护、请求整形 | Next.js Route Handlers；后续按需拆出 |
+| Agent Runtime | 状态构建、模型路由、tool loop、最大迭代控制 | 自研 TypeScript Agent Loop |
+| Model Layer | DeepSeek 模型调用、streaming chunks、thinking mode、JSON output | DeepSeek `/chat/completions`；`@ai-sdk/deepseek` 或带 DeepSeek base URL 的 `openai` client |
+| Tool Layer | Function tools、MCP gateway、审批、审计 | 类型化 tool registry + zod/json schema + policy engine |
+| Knowledge Layer | 文件解析、chunk、embedding、检索、引用 | 优先 Supabase pgvector；后续 Qdrant/Weaviate/Milvus |
+| Web Search Layer | 带引用的实时 web 检索 | Tavily/Exa/Brave Search/SerpAPI 或自建 crawler/search |
+| 持久化 | Conversations、messages、runs、tool calls、audit | Postgres |
+| Async Jobs | 长报告、索引、重试、通知 | MVP 使用 Inngest/Trigger.dev；复杂规模使用 Temporal |
+| Observability | Trace、token/cost、cache hit、错误、反馈 | Langfuse + OpenTelemetry |
+| Evaluation | 回归、red team、RAG eval | CI 中使用 Promptfoo |
 
-## Deployment View
+## 部署视图
 
 ```mermaid
 flowchart TB
-  subgraph Edge["Vercel or Cloudflare Edge"]
-    CDN["Static Assets / CDN"]
+  subgraph Edge["Vercel 或 Cloudflare Edge"]
+    CDN["静态资源 / CDN"]
   end
 
-  subgraph App["Application Runtime"]
+  subgraph App["应用 Runtime"]
     Next["Next.js Web + API"]
-    Worker["Agent Worker<br/>optional after MVP"]
+    Worker["Agent Worker<br/>MVP 后可选"]
   end
 
-  subgraph Managed["Managed Services"]
-    DB["Postgres<br/>Supabase or Neon"]
-    Store["Object Storage<br/>Supabase Storage / S3 / R2 / Vercel Blob"]
+  subgraph Managed["托管服务"]
+    DB["Postgres<br/>Supabase 或 Neon"]
+    Store["对象存储<br/>Supabase Storage / S3 / R2 / Vercel Blob"]
     Vector["Vector Store<br/>Supabase pgvector"]
     Queue["Durable Jobs<br/>Inngest / Trigger.dev / Temporal"]
     Obs["Langfuse / OTel Collector"]
   end
 
-  subgraph External["External AI & Tools"]
+  subgraph External["外部 AI 与工具"]
     DeepSeekAPI["DeepSeek API<br/>https://api.deepseek.com"]
-    MCPServers["Remote MCP Servers"]
+    MCPServers["远程 MCP Servers"]
     SearchAPIs["Search APIs"]
-    BusinessAPIs["Internal / Third-party APIs"]
+    BusinessAPIs["内部 / 第三方 APIs"]
   end
 
   CDN --> Next
@@ -203,14 +203,14 @@ flowchart TB
   Worker --> Obs
 ```
 
-## Key Design Decisions
+## 关键设计决策
 
-- Keep the browser untrusted: no DeepSeek key, tool credentials, or raw system prompts in frontend code.
-- Keep the database as the product source of truth: DeepSeek Chat Completions is stateless, so the app owns conversations, summaries, runs, and tool history.
-- Normalize streaming events: frontend should consume `message.delta`, `tool.*`, `citation.*`, `usage.*`, and `run.*`, not raw provider chunks.
-- Execute tools only in the application layer: DeepSeek chooses tool calls, but the backend validates policy, executes tools, records audit logs, and appends tool messages.
-- Use current model names: prefer `deepseek-v4-flash` and `deepseek-v4-pro`; avoid new work depending on deprecated `deepseek-chat` / `deepseek-reasoner` aliases.
-- Design for context caching: keep stable prompts and project context ordered consistently so DeepSeek prefix caching can help latency and cost.
-- Treat tool outputs as untrusted: web pages, files, and external APIs can carry prompt injection.
-- Start as a modular monolith: Next.js BFF + Agent module is enough for MVP; extract worker service when long tasks and queue pressure appear.
-- Version prompts and tools: Agent behavior is product logic, so changes need review, evals, rollback, and traceability.
+- 浏览器保持不可信：前端代码中不放 DeepSeek key、tool 凭据或原始 system prompt。
+- 数据库作为产品事实源：DeepSeek Chat Completions 是无状态的，因此应用负责 conversations、summaries、runs 和 tool history。
+- 标准化流式事件：前端消费 `message.delta`、`tool.*`、`citation.*`、`usage.*` 和 `run.*`，不要直接消费 provider 原始 chunks。
+- 只在应用层执行 tools：DeepSeek 选择 tool calls，但后端负责校验策略、执行 tools、记录审计日志，并追加 tool messages。
+- 使用当前模型名：优先 `deepseek-v4-flash` 和 `deepseek-v4-pro`；避免新工作依赖已废弃的 `deepseek-chat` / `deepseek-reasoner` 别名。
+- 面向 context caching 设计：稳定 prompt 和项目上下文保持一致顺序，帮助 DeepSeek prefix caching 降低延迟与成本。
+- 把 tool outputs 视为不可信：网页、文件和外部 APIs 都可能携带 prompt injection。
+- 从模块化单体开始：MVP 使用 Next.js BFF + Agent module 已足够；当长任务和队列压力出现后再拆出 worker service。
+- 对 prompts 和 tools 做版本管理：Agent 行为是产品逻辑，因此变更需要 review、evals、rollback 和 traceability。
