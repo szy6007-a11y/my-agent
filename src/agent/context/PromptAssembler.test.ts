@@ -12,8 +12,9 @@ test("PromptAssembler includes the production output protocol contract", async (
     platform: "webui",
   });
 
-  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.web-search-trigger-guidance-v1");
+  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.final-answer-protocol-v1");
   assert.match(assembly.prompt, /<output_protocol_guidance/);
+  assert.match(assembly.prompt, /最终回复必须放在 `<final_answer>\.\.\.<\/final_answer>` 标签内/);
   assert.match(assembly.prompt, /工具只能通过系统原生 tool call 通道调用/);
   assert.match(assembly.prompt, /禁止把工具调用写成 XML、HTML、Markdown、JSON、函数调用文本、DSML/);
   assert.match(assembly.prompt, /不要把“某站点被 block\/blocked”“工具受限”“我换个方向搜索”等检索过程写进最终正文/);

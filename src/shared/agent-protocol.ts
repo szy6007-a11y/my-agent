@@ -184,6 +184,7 @@ export type AgentEvent =
       runId: string;
       toolName?: string;
     }
+  | { type: "assistant.answer.started"; messageId: string; runId: string }
   | { type: "assistant.delta"; messageId: string; text: string }
   | { type: "assistant.delta.retracted"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }

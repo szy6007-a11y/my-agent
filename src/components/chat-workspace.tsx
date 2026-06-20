@@ -1845,6 +1845,15 @@ export function ChatWorkspace({
             });
           }
 
+          if (event.type === "assistant.answer.started") {
+            appendConsoleLog({
+              at: new Date().toISOString(),
+              level: "info",
+              source: "agent",
+              message: "最终回答开始",
+            });
+          }
+
           if (event.type === "assistant.delta") {
             setMessages((current) =>
               appendMessageContent(current, assistantMessage.id, event.text),

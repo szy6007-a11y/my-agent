@@ -586,7 +586,8 @@ type AgentEvent =
   | { type: "context.compacted"; summaryMessageId: string; compactedMessageCount: number; reason?: "proactive" | "reactive" }
   | { type: "payload.sanitized"; runId: string; insertedMissingToolResults: number; removedOrphanToolResults: number; invalidToolArguments: number }
   | { type: "protocol.recovery"; runId: string; reason: "visible_tool_call" | "duplicate_answer_prefix" | "context_too_long"; retryAttempt: number; toolName?: string }
-  | { type: "assistant.delta"; messageId: string; text: string }
+  | { type: "assistant.answer.started"; runId: string; messageId: string }
+  | { type: "assistant.delta"; messageId: string; text: string } // 仅最终回答正文增量
   | { type: "assistant.delta.retracted"; messageId: string; text: string }
   | { type: "reasoning.delta"; messageId: string; text: string }
   | { type: "tool.started"; runId: string; toolCallId: string; toolName: string; argumentsPreview?: string }

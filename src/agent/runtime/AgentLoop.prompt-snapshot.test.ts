@@ -103,9 +103,9 @@ class ToolNarrationThenFinalModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "这是" };
+    yield { type: "text_delta" as const, text: "<final_answer>这是" };
     yield { type: "text_delta" as const, text: "最终" };
-    yield { type: "text_delta" as const, text: "回答。" };
+    yield { type: "text_delta" as const, text: "回答。</final_answer>" };
   }
 }
 
@@ -415,7 +415,7 @@ test("AgentLoop finalizes without tools after tool round limit", async () => {
   assert.equal(events.at(-1)?.type, "run.completed");
 });
 
-test("AgentLoop folds pre-tool narration into reasoning while streaming the final answer", async () => {
+test("AgentLoop keeps pre-tool narration out of the visible stream while streaming the final answer", async () => {
   const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
     import("@/agent/context/ContextEngine"),
     import("@/agent/runtime/AgentLoop"),
@@ -459,7 +459,10 @@ test("AgentLoop folds pre-tool narration into reasoning while streaming the fina
       event.type === "reasoning.delta",
     )
     .map((event) => event.text);
-  const retractionIndex = events.findIndex((event) => event.type === "assistant.delta.retracted");
+  const answerStartIndex = events.findIndex(
+    (event) => event.type === "assistant.answer.started",
+  );
+  const firstDeltaIndex = events.findIndex((event) => event.type === "assistant.delta");
   const firstToolStartIndex = events.findIndex((event) => event.type === "tool.started");
   const toolCallMessage = sessions.messages.find(
     (message) => message.role === "assistant" && message.toolCalls?.length,
@@ -467,11 +470,12 @@ test("AgentLoop folds pre-tool narration into reasoning while streaming the fina
 
   assert.equal(modelRouter.calls.length, 2);
   assert.ok(modelRouter.calls.every((toolCount) => toolCount > 0));
-  assert.deepEqual(deltaTexts, ["Let me search first.", "这是", "最终", "回答。"]);
-  assert.deepEqual(retractedTexts, ["Let me search first."]);
+  assert.deepEqual(deltaTexts, ["这是", "最终", "回答。"]);
+  assert.deepEqual(retractedTexts, []);
   assert.deepEqual(reasoningTexts, ["Let me search first."]);
-  assert.ok(retractionIndex >= 0);
-  assert.ok(firstToolStartIndex > retractionIndex);
+  assert.ok(firstToolStartIndex >= 0);
+  assert.ok(answerStartIndex > firstToolStartIndex);
+  assert.ok(firstDeltaIndex > answerStartIndex);
   assert.equal(visibleAssistantText(events), "这是最终回答。");
   assert.equal(sessions.messages.at(-1)?.content, "这是最终回答。");
   assert.equal(toolCallMessage?.content, "Let me search first.");

@@ -9,6 +9,10 @@ import { ModelRouter } from "@/agent/models/ModelRouter";
 import { BackgroundReviewAgent } from "@/agent/review/BackgroundReviewAgent";
 import { sanitizeModelMessages } from "@/agent/runtime/PayloadSanitizer";
 import {
+  FinalAnswerStream,
+  stripFinalAnswerProtocolTags,
+} from "@/agent/runtime/FinalAnswerStream";
+import {
   SYSTEM_REMINDER_CLOSE_TAG,
   applyRuntimeReminder,
   previewToolArguments,
@@ -491,7 +495,20 @@ export class AgentLoop {
     const artifacts: AgentArtifact[] = [];
     let workingMessages: ModelMessage[] = [...context.messages];
     let visibleAssistantText = "";
+    let assistantAnswerStarted = false;
     let protocolRecoveryAttempts = 0;
+    const maybeStartAnswer = (): AgentEvent | null => {
+      if (assistantAnswerStarted) {
+        return null;
+      }
+
+      assistantAnswerStarted = true;
+      return {
+        type: "assistant.answer.started",
+        messageId: assistantMessageId,
+        runId: input.runId,
+      };
+    };
 
     try {
       for (let round = 0; round < maxToolRounds; round += 1) {
@@ -506,6 +523,7 @@ export class AgentLoop {
         let visiblePassText = "";
         let passTextMovedToReasoning = false;
         let visibleToolCallViolation: VisibleToolCallViolation | null = null;
+        const finalAnswerStream = new FinalAnswerStream();
         const visibleToolCallDetector = new VisibleToolCallDetector(tools.names);
         const toolCalls: ModelToolCall[] = [];
         const sanitizedPayload = sanitizeModelMessages(workingMessages);
@@ -542,17 +560,8 @@ export class AgentLoop {
 
           if (event.type === "text_delta") {
             passText += event.text;
-            if (visibleToolCallViolation) {
-              continue;
-            }
 
-            if (passTextMovedToReasoning) {
-              yield {
-                type: "reasoning.delta",
-                messageId: assistantMessageId,
-                text: event.text,
-              };
-            } else {
+            if (!visibleToolCallViolation) {
               const violation = visibleToolCallDetector.push(event.text);
               if (violation) {
                 visibleToolCallViolation = violation;
@@ -568,13 +577,32 @@ export class AgentLoop {
                 }
                 continue;
               }
+            }
 
-              visiblePassText += event.text;
-              visibleAssistantText += event.text;
+            if (visibleToolCallViolation) {
+              continue;
+            }
+
+            const finalAnswerChunk = finalAnswerStream.push(event.text);
+            if (finalAnswerChunk.hiddenText.trim()) {
+              yield {
+                type: "reasoning.delta",
+                messageId: assistantMessageId,
+                text: finalAnswerChunk.hiddenText,
+              };
+            }
+
+            if (finalAnswerChunk.answerText) {
+              const startEvent = maybeStartAnswer();
+              if (startEvent) {
+                yield startEvent;
+              }
+              visiblePassText += finalAnswerChunk.answerText;
+              visibleAssistantText += finalAnswerChunk.answerText;
               yield {
                 type: "assistant.delta",
                 messageId: assistantMessageId,
-                text: event.text,
+                text: finalAnswerChunk.answerText,
               };
             }
           }
@@ -604,11 +632,12 @@ export class AgentLoop {
                 text: visiblePassText,
               };
             }
-            if (passText) {
+            const reasoningText = stripFinalAnswerProtocolTags(passText);
+            if (reasoningText.trim()) {
               yield {
                 type: "reasoning.delta",
                 messageId: assistantMessageId,
-                text: passText,
+                text: reasoningText,
               };
             }
           }
@@ -677,6 +706,10 @@ export class AgentLoop {
 
           if (visibleToolCallViolation) {
             const replacement = "模型输出了无效的工具调用文本，已停止展示。请重试。";
+            const startEvent = maybeStartAnswer();
+            if (startEvent) {
+              yield startEvent;
+            }
             visibleAssistantText += replacement;
             yield {
               type: "assistant.delta",
@@ -685,16 +718,37 @@ export class AgentLoop {
             };
           }
 
-          if (!visibleToolCallViolation && passTextMovedToReasoning && passText.trim()) {
-            visibleAssistantText += passText;
-            yield {
-              type: "assistant.delta",
-              messageId: assistantMessageId,
-              text: passText,
-            };
+          if (!visibleToolCallViolation) {
+            const finalAnswerFinish = finalAnswerStream.finish();
+            if (finalAnswerFinish.hiddenText.trim()) {
+              yield {
+                type: "reasoning.delta",
+                messageId: assistantMessageId,
+                text: finalAnswerFinish.hiddenText,
+              };
+            }
+
+            const finalAnswerText =
+              finalAnswerFinish.answerText || finalAnswerFinish.fallbackAnswerText;
+            if (finalAnswerText.trim()) {
+              const startEvent = maybeStartAnswer();
+              if (startEvent) {
+                yield startEvent;
+              }
+              visibleAssistantText += finalAnswerText;
+              yield {
+                type: "assistant.delta",
+                messageId: assistantMessageId,
+                text: finalAnswerText,
+              };
+            }
           }
 
-          if (!passText.trim() && !visibleAssistantText.trim()) {
+          if (!visibleAssistantText.trim()) {
+            const startEvent = maybeStartAnswer();
+            if (startEvent) {
+              yield startEvent;
+            }
             visibleAssistantText += EMPTY_ASSISTANT_FALLBACK;
             yield {
               type: "assistant.delta",
@@ -760,14 +814,17 @@ export class AgentLoop {
         }
 
         toolIterations += 1;
-        const assistantToolContent = visibleToolCallViolation ? "" : passText;
-        if (assistantToolContent && !passTextMovedToReasoning) {
+        const assistantToolContent =
+          visibleToolCallViolation ? "" : stripFinalAnswerProtocolTags(passText);
+        if (assistantToolContent.trim() && !passTextMovedToReasoning) {
           visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
-          yield {
-            type: "assistant.delta.retracted",
-            messageId: assistantMessageId,
-            text: visiblePassText,
-          };
+          if (visiblePassText) {
+            yield {
+              type: "assistant.delta.retracted",
+              messageId: assistantMessageId,
+              text: visiblePassText,
+            };
+          }
           yield {
             type: "reasoning.delta",
             messageId: assistantMessageId,
@@ -1058,7 +1115,7 @@ export class AgentLoop {
       }
 
       await this.sessions.updateRunStatus(input.runId, "finalizing");
-      let finalizerText = "";
+      const finalizerAnswerStream = new FinalAnswerStream();
       const sanitizedFinalizerPayload = sanitizeModelMessages(workingMessages);
       if (sanitizedFinalizerPayload.changed) {
         workingMessages = sanitizedFinalizerPayload.messages;
@@ -1097,13 +1154,26 @@ export class AgentLoop {
         }
 
         if (event.type === "text_delta") {
-          finalizerText += event.text;
-          visibleAssistantText += event.text;
-          yield {
-            type: "assistant.delta",
-            messageId: assistantMessageId,
-            text: event.text,
-          };
+          const finalAnswerChunk = finalizerAnswerStream.push(event.text);
+          if (finalAnswerChunk.hiddenText.trim()) {
+            yield {
+              type: "reasoning.delta",
+              messageId: assistantMessageId,
+              text: finalAnswerChunk.hiddenText,
+            };
+          }
+          if (finalAnswerChunk.answerText) {
+            const startEvent = maybeStartAnswer();
+            if (startEvent) {
+              yield startEvent;
+            }
+            visibleAssistantText += finalAnswerChunk.answerText;
+            yield {
+              type: "assistant.delta",
+              messageId: assistantMessageId,
+              text: finalAnswerChunk.answerText,
+            };
+          }
         }
 
         if (event.type === "reasoning_delta") {
@@ -1127,11 +1197,35 @@ export class AgentLoop {
         }
       }
 
-      if (!finalizerText.trim()) {
-        const fallbackDelta =
-          visibleAssistantText.trim() ?
-            `\n\n（${TOOL_ROUND_LIMIT_FALLBACK}）`
-          : TOOL_ROUND_LIMIT_FALLBACK;
+      const finalizerAnswerFinish = finalizerAnswerStream.finish();
+      if (finalizerAnswerFinish.hiddenText.trim()) {
+        yield {
+          type: "reasoning.delta",
+          messageId: assistantMessageId,
+          text: finalizerAnswerFinish.hiddenText,
+        };
+      }
+      const finalizerVisibleText =
+        finalizerAnswerFinish.answerText || finalizerAnswerFinish.fallbackAnswerText;
+      if (finalizerVisibleText.trim()) {
+        const startEvent = maybeStartAnswer();
+        if (startEvent) {
+          yield startEvent;
+        }
+        visibleAssistantText += finalizerVisibleText;
+        yield {
+          type: "assistant.delta",
+          messageId: assistantMessageId,
+          text: finalizerVisibleText,
+        };
+      }
+
+      if (!visibleAssistantText.trim()) {
+        const fallbackDelta = TOOL_ROUND_LIMIT_FALLBACK;
+        const startEvent = maybeStartAnswer();
+        if (startEvent) {
+          yield startEvent;
+        }
         visibleAssistantText += fallbackDelta;
         yield {
           type: "assistant.delta",

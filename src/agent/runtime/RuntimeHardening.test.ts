@@ -624,7 +624,7 @@ test("AgentLoop recovers once when the model writes a visible tool call", async 
 
   assert.equal(modelRouter.payloads.length, 2);
   assert.equal(events.some((event) => event.type === "protocol.recovery"), true);
-  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
+  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), false);
   assert.equal(
     sessions.updatedMessages.some((message) =>
       message.content.includes("[protocol-correction:visible_tool_call]"),
@@ -679,7 +679,7 @@ test("AgentLoop recovers when the model writes a visible DeepSeek DSML tool call
     toolName: "write_file_chunk",
     type: "protocol.recovery",
   });
-  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
+  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), false);
   assert.equal(sessions.messages.at(-1)?.content, "已恢复 DSML。");
 });
 
@@ -724,7 +724,7 @@ test("AgentLoop absorbs visible tool text when the same attempt emits a native t
 
   assert.equal(modelRouter.payloads.length, 2);
   assert.equal(events.some((event) => event.type === "protocol.recovery"), false);
-  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), true);
+  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), false);
   assert.equal(JSON.stringify(modelRouter.payloads[1]).includes("fake_write({"), false);
   assert.equal(sessions.messages.find((message) => message.toolCalls?.length)?.content, "");
   assert.equal(sessions.messages.at(-1)?.content, "写入完成。");
