@@ -1783,9 +1783,37 @@ body > button[aria-label="Open Next.js Dev Tools"],
   background: transparent;
   color: var(--foreground);
   line-height: 24px;
-  overflow-y: auto;
+  overflow-y: scroll;
   overscroll-behavior: contain;
   padding: 0;
+  scrollbar-color: #c6c6c6 transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.composer textarea::-webkit-scrollbar {
+  width: 10px;
+}
+
+.composer textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.composer textarea::-webkit-scrollbar-thumb {
+  min-height: 38px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #c6c6c6;
+  background-clip: content-box;
+}
+
+.composer textarea::-webkit-scrollbar-thumb:hover {
+  background: #adadad;
+  background-clip: content-box;
+}
+
+.composer textarea::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .mode-button {
