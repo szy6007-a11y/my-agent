@@ -57,6 +57,7 @@ const serverEnvSchema = z.object({
   WEB_PROVIDER: optionalEnv(webProviderSchema),
   WEB_SEARCH_DEFAULT_LIMIT: optionalEnv(z.coerce.number().int().positive()),
   WEB_SEARCH_FALLBACK_PROVIDER: optionalEnv(webProviderSchema),
+  WEB_SEARCH_GITHUB_ENRICH_LIMIT: optionalEnv(z.coerce.number().int().min(0).max(20)),
   WEB_SEARCH_PROVIDER: optionalEnv(webProviderSchema),
   WEB_SEARCH_TIMEOUT_MS: optionalEnv(z.coerce.number().int().positive()),
   BRAVE_SEARCH_API_KEY: optionalEnv(z.string().min(1)),

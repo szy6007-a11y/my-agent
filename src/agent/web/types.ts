@@ -9,8 +9,27 @@ export type WebProviderName =
   | "searxng"
   | "tavily";
 
+export type GitHubRepositoryMetadata = {
+  default_branch: string;
+  description: string;
+  forks: number;
+  full_name: string;
+  html_url: string;
+  language: string;
+  license: string;
+  open_issues: number;
+  pushed_at: string;
+  retrieved_at: string;
+  source: "github_rest_api";
+  stars: number;
+  updated_at: string;
+};
+
 export type WebSearchResult = {
   description: string;
+  metadata?: {
+    github?: GitHubRepositoryMetadata;
+  };
   position: number;
   title: string;
   url: string;

@@ -18,6 +18,8 @@ export const DEFAULT_WEB_EXTRACT_MIN_LENGTH = 5_000;
 export const DEFAULT_WEB_EXTRACT_MAX_CHARS = 5_000;
 export const MAX_WEB_EXTRACT_URLS = 5;
 export const MAX_WEB_TOOL_RESULT_CHARS = 100_000;
+export const DEFAULT_WEB_SEARCH_GITHUB_ENRICH_LIMIT = 10;
+export const MAX_WEB_SEARCH_GITHUB_ENRICH_LIMIT = 20;
 
 export function envValue(name: string): string {
   return (process.env[name] ?? "").trim();
@@ -77,6 +79,15 @@ export function configuredWebSearchLimit(): number {
     DEFAULT_WEB_SEARCH_LIMIT,
     1,
     MAX_WEB_SEARCH_LIMIT,
+  );
+}
+
+export function configuredWebSearchGitHubEnrichLimit(): number {
+  return envInt(
+    "WEB_SEARCH_GITHUB_ENRICH_LIMIT",
+    DEFAULT_WEB_SEARCH_GITHUB_ENRICH_LIMIT,
+    0,
+    MAX_WEB_SEARCH_GITHUB_ENRICH_LIMIT,
   );
 }
 

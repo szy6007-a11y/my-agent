@@ -76,6 +76,80 @@ test("web_search tool is advertised and returns provider-normalized sources", as
   assert.deepEqual(result.sources, [{ title: "Result", url: "https://example.com/result" }]);
 });
 
+test("web_search enriches GitHub repository results with live star counts", async () => {
+  const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
+  const previousFetch = globalThis.fetch;
+  const previousEnrichLimit = process.env.WEB_SEARCH_GITHUB_ENRICH_LIMIT;
+  process.env.WEB_SEARCH_GITHUB_ENRICH_LIMIT = "5";
+  globalThis.fetch = async () =>
+    ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          default_branch: "main",
+          description: "Reference agents for financial services.",
+          forks_count: 4598,
+          full_name: "anthropics/financial-services",
+          html_url: "https://github.com/anthropics/financial-services",
+          language: "Python",
+          license: { spdx_id: "Apache-2.0" },
+          open_issues_count: 166,
+          pushed_at: "2026-06-05T20:53:09Z",
+          stargazers_count: 31979,
+          updated_at: "2026-06-20T10:48:09Z",
+        }),
+    }) as Response;
+  const fakeProvider: WebSearchProvider = {
+    displayName: "DuckDuckGo (ddgs)",
+    isAvailable: () => true,
+    name: "ddgs",
+    search: async (query) => ({
+      data: {
+        web: [
+          {
+            description: "A stale third-party snippet says 12,088 stars.",
+            position: 1,
+            title: "GitHub - anthropics/financial-services",
+            url: "https://github.com/anthropics/financial-services",
+          },
+        ],
+      },
+      provider: "ddgs",
+      query,
+      success: true,
+    }),
+    supportsExtract: () => false,
+    supportsSearch: () => true,
+  };
+  const registry = new ToolRegistry(createWebTools(new WebSearchRegistry([fakeProvider])));
+
+  try {
+    const result = JSON.parse(
+      await registry.execute(
+        makeToolCall("web_search", { query: "github anthropics/financial-services stars" }),
+        makeContext(),
+      ),
+    ) as {
+      data: { web: Array<{ metadata?: { github?: { stars?: number } } }> };
+      github_repositories: Array<{ full_name: string; source: string; stars: number }>;
+    };
+
+    assert.equal(result.data.web[0]?.metadata?.github?.stars, 31979);
+    assert.equal(result.github_repositories[0]?.full_name, "anthropics/financial-services");
+    assert.equal(result.github_repositories[0]?.source, "github_rest_api");
+    assert.equal(result.github_repositories[0]?.stars, 31979);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousEnrichLimit === undefined) {
+      delete process.env.WEB_SEARCH_GITHUB_ENRICH_LIMIT;
+    } else {
+      process.env.WEB_SEARCH_GITHUB_ENRICH_LIMIT = previousEnrichLimit;
+    }
+  }
+});
+
 test("web_search falls back to ddgs when firecrawl fails", async () => {
   const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
   const firecrawlProvider: WebSearchProvider = {

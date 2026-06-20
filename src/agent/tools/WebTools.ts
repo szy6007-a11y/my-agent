@@ -13,11 +13,12 @@ import {
   createDefaultWebSearchRegistry,
   type WebSearchRegistry,
 } from "@/agent/web/WebSearchRegistry";
+import { enrichGitHubSearchResults } from "@/agent/web/GitHubMetadata";
 import type { WebExtractDocument } from "@/agent/web/types";
 import { validateExternalUrl } from "@/agent/web/urlSafety";
-import type { AgentTool } from "@/agent/tools/types";
+import type { AgentTool, ToolExecutionContext } from "@/agent/tools/types";
 import { toolError, toolSuccess } from "@/agent/tools/types";
-import type { WebSearchResponse } from "@/agent/web/types";
+import type { GitHubRepositoryMetadata, WebSearchResponse } from "@/agent/web/types";
 
 type WebSearchArgs = {
   allowed_domains?: unknown;
@@ -75,16 +76,36 @@ function formatSearchResult(
     return JSON.stringify(fallback ? { ...result, fallback } : result);
   }
 
+  const githubRepositories = result.data.web
+    .map((item) => item.metadata?.github)
+    .filter((item): item is GitHubRepositoryMetadata => Boolean(item));
+
   return JSON.stringify({
     ...result,
     ...(fallback ? { fallback } : {}),
+    ...(githubRepositories.length > 0 ? { github_repositories: githubRepositories } : {}),
     citations:
-      "When using web_search results, cite sources with markdown links and do not imply unsupported facts.",
+      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. For GitHub repository star/fork counts, use data.web[].metadata.github or github_repositories only; do not infer current counts from search snippets.",
     sources: result.data.web.map((item) => ({
       title: item.title,
       url: item.url,
     })),
   });
+}
+
+async function enrichSearchResult(result: WebSearchResponse, context: ToolExecutionContext) {
+  if (!result.success) {
+    return result;
+  }
+  return {
+    ...result,
+    data: {
+      web: await enrichGitHubSearchResults(result.data.web, {
+        signal: context.signal,
+        timeoutMs: configuredWebTimeoutMs(),
+      }),
+    },
+  };
 }
 
 async function validateExtractUrls(rawUrls: unknown) {
@@ -129,7 +150,7 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
     definition: {
       function: {
         description:
-          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, and a citation reminder. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
+          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, and a citation reminder. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
         name: "web_search",
         parameters: {
           properties: {
@@ -189,12 +210,15 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
         signal: context.signal,
         timeoutMs: configuredWebTimeoutMs(),
       };
-      const result = await provider.search(query, limit, options);
+      const result = await enrichSearchResult(await provider.search(query, limit, options), context);
 
       if (!result.success) {
         const fallbackProvider = registry.getFallbackProvider("search", provider);
         if (!context.signal?.aborted && fallbackProvider?.search) {
-          const fallbackResult = await fallbackProvider.search(query, limit, options);
+          const fallbackResult = await enrichSearchResult(
+            await fallbackProvider.search(query, limit, options),
+            context,
+          );
           const fallback = { from: provider.name, reason: result.error };
           if (fallbackResult.success) {
             return formatSearchResult(fallbackResult, fallback);
