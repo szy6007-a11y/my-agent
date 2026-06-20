@@ -1763,7 +1763,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
 .composer {
   display: flex;
   width: 100%;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1783,7 +1783,8 @@ body > button[aria-label="Open Next.js Dev Tools"],
   background: transparent;
   color: var(--foreground);
   line-height: 24px;
-  overflow-y: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0;
 }
 

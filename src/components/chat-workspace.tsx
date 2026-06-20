@@ -123,6 +123,7 @@ type ServiceLogEvent = {
 };
 
 const MAX_CONSOLE_LOGS = 28;
+const COMPOSER_TEXTAREA_MAX_HEIGHT = 160;
 const SCROLL_BOTTOM_FALLBACK_THRESHOLD = 96;
 const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px -96px 0px";
 
@@ -970,6 +971,7 @@ export function ChatWorkspace() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const lastScrollTopRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -977,6 +979,20 @@ export function ChatWorkspace() {
   const taskCompletionSignatureRef = useRef("");
   const touchStartYRef = useRef<number | null>(null);
   const userDetachedFromBottomRef = useRef(false);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(
+      textarea.scrollHeight,
+      COMPOSER_TEXTAREA_MAX_HEIGHT,
+    )}px`;
+  }, [input]);
+
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${shortSessionId(sessionId)}` : "尚未创建会话"),
     [sessionId],
@@ -2537,7 +2553,13 @@ export function ChatWorkspace() {
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
+              onWheel={(event) => {
+                if (event.currentTarget.scrollHeight > event.currentTarget.clientHeight) {
+                  event.stopPropagation();
+                }
+              }}
               placeholder="有问题，尽管问"
+              ref={inputRef}
               rows={1}
               value={input}
             />
