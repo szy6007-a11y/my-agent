@@ -14,6 +14,10 @@ import {
   type WebSearchRegistry,
 } from "@/agent/web/WebSearchRegistry";
 import { enrichGitHubSearchResults } from "@/agent/web/GitHubMetadata";
+import {
+  resolveWebSearchSourcePolicy,
+  type AppliedWebSearchSourcePolicy,
+} from "@/agent/web/SourcePolicy";
 import type { WebExtractDocument } from "@/agent/web/types";
 import { validateExternalUrl } from "@/agent/web/urlSafety";
 import type { AgentTool, ToolExecutionContext } from "@/agent/tools/types";
@@ -71,9 +75,13 @@ function asFormat(value: unknown): "html" | "markdown" | "text" {
 function formatSearchResult(
   result: WebSearchResponse,
   fallback?: { from: string; reason: string },
+  sourcePolicy?: AppliedWebSearchSourcePolicy,
 ): string {
+  const policyPayload = sourcePolicy ? { source_policy: sourcePolicy } : {};
   if (!result.success) {
-    return JSON.stringify(fallback ? { ...result, fallback } : result);
+    return JSON.stringify(
+      fallback ? { ...result, ...policyPayload, fallback } : { ...result, ...policyPayload },
+    );
   }
 
   const githubRepositories = result.data.web
@@ -82,10 +90,11 @@ function formatSearchResult(
 
   return JSON.stringify({
     ...result,
+    ...policyPayload,
     ...(fallback ? { fallback } : {}),
     ...(githubRepositories.length > 0 ? { github_repositories: githubRepositories } : {}),
     citations:
-      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. For GitHub repository star/fork counts, use data.web[].metadata.github or github_repositories only; do not infer current counts from search snippets.",
+      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. If source_policy is present, treat it as the server-selected source boundary for the query. For GitHub repository star/fork counts, use data.web[].metadata.github or github_repositories only; do not infer current counts from search snippets. For financial market prices or closes, prefer source-policy selected finance/news domains and do not infer exact current values from generic snippets.",
     sources: result.data.web.map((item) => ({
       title: item.title,
       url: item.url,
@@ -150,7 +159,7 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
     definition: {
       function: {
         description:
-          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, and a citation reminder. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
+          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, source policy metadata when a high-risk query is detected, and a citation reminder. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
         name: "web_search",
         parameters: {
           properties: {
@@ -204,9 +213,13 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
       }
 
       const limit = clampInt(input.limit, configuredWebSearchLimit(), 1, 100);
-      const options = {
+      const requestedOptions = {
         allowedDomains: asStringArray(input.allowed_domains),
         blockedDomains: asStringArray(input.blocked_domains),
+      };
+      const sourcePolicy = resolveWebSearchSourcePolicy(query, requestedOptions);
+      const options = {
+        ...sourcePolicy.options,
         signal: context.signal,
         timeoutMs: configuredWebTimeoutMs(),
       };
@@ -221,18 +234,18 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
           );
           const fallback = { from: provider.name, reason: result.error };
           if (fallbackResult.success) {
-            return formatSearchResult(fallbackResult, fallback);
+            return formatSearchResult(fallbackResult, fallback, sourcePolicy.sourcePolicy);
           }
           return formatSearchResult({
             error: `${result.error} Fallback ${fallbackProvider.name} also failed: ${fallbackResult.error}`,
             provider: provider.name,
             success: false,
-          });
+          }, undefined, sourcePolicy.sourcePolicy);
         }
-        return formatSearchResult(result);
+        return formatSearchResult(result, undefined, sourcePolicy.sourcePolicy);
       }
 
-      return formatSearchResult(result);
+      return formatSearchResult(result, undefined, sourcePolicy.sourcePolicy);
     },
   };
 

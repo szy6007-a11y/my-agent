@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ModelToolCall } from "@/agent/runtime/types";
-import type { WebSearchProvider } from "@/agent/web/types";
+import type { WebSearchOptions, WebSearchProvider } from "@/agent/web/types";
 
 process.env.DEEPSEEK_API_KEY ??= "test-deepseek-key";
 
@@ -148,6 +148,115 @@ test("web_search enriches GitHub repository results with live star counts", asyn
       process.env.WEB_SEARCH_GITHUB_ENRICH_LIMIT = previousEnrichLimit;
     }
   }
+});
+
+test("web_search applies source policy domains to financial market lookups", async () => {
+  const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
+  let capturedOptions: WebSearchOptions | undefined;
+  const fakeProvider: WebSearchProvider = {
+    displayName: "Firecrawl",
+    isAvailable: () => true,
+    name: "firecrawl",
+    search: async (query, _limit, options) => {
+      capturedOptions = options;
+      return {
+        data: {
+          web: [
+            {
+              description: "S&P 500 historical data.",
+              position: 1,
+              title: "S&P 500 INDEX Historical Data - Yahoo Finance",
+              url: "https://finance.yahoo.com/quote/%5EGSPC/history/",
+            },
+          ],
+        },
+        provider: "firecrawl",
+        query,
+        success: true,
+      };
+    },
+    supportsExtract: () => false,
+    supportsSearch: () => true,
+  };
+  const registry = new ToolRegistry(createWebTools(new WebSearchRegistry([fakeProvider])));
+
+  const result = JSON.parse(
+    await registry.execute(
+      makeToolCall("web_search", { query: "S&P 500 close today June 20 2026" }),
+      makeContext(),
+    ),
+  ) as {
+    source_policy?: {
+      allowed_domains: string[];
+      id: string;
+    };
+    success: boolean;
+  };
+
+  assert.equal(result.success, true);
+  assert.equal(result.source_policy?.id, "financial_market_data");
+  assert.deepEqual(capturedOptions?.allowedDomains?.slice(0, 5), [
+    "finance.yahoo.com",
+    "bloomberg.com",
+    "marketwatch.com",
+    "cnbc.com",
+    "reuters.com",
+  ]);
+  assert.deepEqual(result.source_policy?.allowed_domains.slice(0, 5), [
+    "finance.yahoo.com",
+    "bloomberg.com",
+    "marketwatch.com",
+    "cnbc.com",
+    "reuters.com",
+  ]);
+});
+
+test("web_search keeps explicit allowed domains over source policy domains", async () => {
+  const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
+  let capturedOptions: WebSearchOptions | undefined;
+  const fakeProvider: WebSearchProvider = {
+    displayName: "Firecrawl",
+    isAvailable: () => true,
+    name: "firecrawl",
+    search: async (query, _limit, options) => {
+      capturedOptions = options;
+      return {
+        data: {
+          web: [
+            {
+              description: "SEC result",
+              position: 1,
+              title: "SEC",
+              url: "https://www.sec.gov/result",
+            },
+          ],
+        },
+        provider: "firecrawl",
+        query,
+        success: true,
+      };
+    },
+    supportsExtract: () => false,
+    supportsSearch: () => true,
+  };
+  const registry = new ToolRegistry(createWebTools(new WebSearchRegistry([fakeProvider])));
+
+  const result = JSON.parse(
+    await registry.execute(
+      makeToolCall("web_search", {
+        allowed_domains: ["https://www.sec.gov/reports"],
+        query: "S&P 500 close today June 20 2026",
+      }),
+      makeContext(),
+    ),
+  ) as {
+    source_policy?: unknown;
+    success: boolean;
+  };
+
+  assert.equal(result.success, true);
+  assert.equal(result.source_policy, undefined);
+  assert.deepEqual(capturedOptions?.allowedDomains, ["www.sec.gov"]);
 });
 
 test("web_search falls back to ddgs when firecrawl fails", async () => {
