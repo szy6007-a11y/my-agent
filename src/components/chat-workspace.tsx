@@ -165,6 +165,24 @@ async function writeClipboardText(text: string) {
   document.body.removeChild(element);
 }
 
+function createClientId(prefix: string) {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (randomUuid) {
+    return `${prefix}_${randomUuid}`;
+  }
+
+  const bytes = new Uint8Array(16);
+  globalThis.crypto?.getRandomValues?.(bytes);
+  if (bytes.some((byte) => byte !== 0)) {
+    const randomHex = Array.from(bytes, (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    return `${prefix}_${randomHex}`;
+  }
+
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
 function parseSseEvent(eventText: string): AgentEvent | null {
   const dataLines = eventText
     .split("\n")
@@ -1017,7 +1035,7 @@ export function ChatWorkspace({
 
   const appendConsoleLog = useCallback(
     (log: Omit<ServiceConsoleLog, "id"> & { id?: string }) => {
-      const id = log.id ?? crypto.randomUUID();
+      const id = log.id ?? createClientId("console");
 
       setConsoleLogs((current) =>
         [
@@ -1667,12 +1685,12 @@ export function ChatWorkspace({
     }
 
     const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: createClientId("user"),
       role: "user",
       content: prompt,
     };
     const assistantMessage: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: createClientId("assistant"),
       role: "assistant",
       content: "",
       status: "streaming",
