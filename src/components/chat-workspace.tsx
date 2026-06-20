@@ -124,6 +124,7 @@ const MAX_CONSOLE_LOGS = 28;
 const COMPOSER_TEXTAREA_MAX_HEIGHT = 120;
 const SCROLL_BOTTOM_FALLBACK_THRESHOLD = 96;
 const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px -96px 0px";
+const SIDEBAR_TRANSITION_MS = 260;
 
 function chatPath(sessionId: string | null) {
   return sessionId ? `/chat/${encodeURIComponent(sessionId)}` : "/chat";
@@ -951,6 +952,7 @@ export function ChatWorkspace({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarContentMounted, setSidebarContentMounted] = useState(true);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedShareMessageId, setCopiedShareMessageId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -977,6 +979,39 @@ export function ChatWorkspace({
   const taskCompletionSignatureRef = useRef("");
   const touchStartYRef = useRef<number | null>(null);
   const userDetachedFromBottomRef = useRef(false);
+  const sidebarUnmountTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (sidebarUnmountTimerRef.current !== null) {
+        window.clearTimeout(sidebarUnmountTimerRef.current);
+      }
+    };
+  }, []);
+
+  const collapseSidebar = useCallback(() => {
+    if (sidebarUnmountTimerRef.current !== null) {
+      window.clearTimeout(sidebarUnmountTimerRef.current);
+    }
+
+    setSidebarCollapsed(true);
+    sidebarUnmountTimerRef.current = window.setTimeout(() => {
+      setSidebarContentMounted(false);
+      sidebarUnmountTimerRef.current = null;
+    }, SIDEBAR_TRANSITION_MS);
+  }, []);
+
+  const expandSidebar = useCallback(() => {
+    if (sidebarUnmountTimerRef.current !== null) {
+      window.clearTimeout(sidebarUnmountTimerRef.current);
+      sidebarUnmountTimerRef.current = null;
+    }
+
+    setSidebarContentMounted(true);
+    window.requestAnimationFrame(() => {
+      setSidebarCollapsed(false);
+    });
+  }, []);
 
   useEffect(() => {
     const textarea = inputRef.current;
@@ -2397,15 +2432,19 @@ export function ChatWorkspace({
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <aside className="sidebar" aria-hidden={sidebarCollapsed}>
-        {!sidebarCollapsed && (
-          <>
+      <aside
+        className="sidebar"
+        aria-hidden={sidebarCollapsed}
+        inert={sidebarCollapsed ? true : undefined}
+      >
+        {sidebarContentMounted && (
+          <div className="sidebar-inner">
             <div className="brand-row">
               <strong>My Agent</strong>
               <button
                 className="icon-button"
                 aria-label="折叠侧栏"
-                onClick={() => setSidebarCollapsed(true)}
+                onClick={collapseSidebar}
                 title="折叠侧栏"
                 type="button"
               >
@@ -2471,7 +2510,7 @@ export function ChatWorkspace({
                 <LogOut size={17} />
               </button>
             </div>
-          </>
+          </div>
         )}
       </aside>
 
@@ -2480,7 +2519,7 @@ export function ChatWorkspace({
           <button
             className="icon-button sidebar-expand-button"
             aria-label="展开侧栏"
-            onClick={() => setSidebarCollapsed(false)}
+            onClick={expandSidebar}
             title="展开侧栏"
             type="button"
           >
