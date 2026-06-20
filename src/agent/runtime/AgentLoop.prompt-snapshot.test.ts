@@ -109,6 +109,23 @@ class ToolNarrationThenFinalModelRouter {
   }
 }
 
+class LongUntaggedFinalModelRouter {
+  async *stream() {
+    yield {
+      type: "text_delta" as const,
+      text: "# 最后一位记账员\n\n老周在这个柜台后面坐了三十七年。".repeat(8),
+    };
+    yield {
+      type: "text_delta" as const,
+      text: "\n\n后来，他发现账本里多了一条不存在的支出。",
+    };
+    yield {
+      type: "text_delta" as const,
+      text: "\n\n故事到这里才真正开始。",
+    };
+  }
+}
+
 class ProactiveCompressionStub {
   updateFromResponse(): void {
     return;
@@ -479,4 +496,52 @@ test("AgentLoop keeps pre-tool narration out of the visible stream while streami
   assert.equal(visibleAssistantText(events), "这是最终回答。");
   assert.equal(sessions.messages.at(-1)?.content, "这是最终回答。");
   assert.equal(toolCallMessage?.content, "Let me search first.");
+});
+
+test("AgentLoop streams long untagged final answers instead of flushing them at the end", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const contextEngine = new ContextEngine({
+    assemble: () => makePrompt("untagged-final-answer-prompt"),
+  } as unknown as PromptAssembler);
+  const sessions = new FakeSessionRepository();
+  const loop = new AgentLoop(
+    contextEngine,
+    new LongUntaggedFinalModelRouter() as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 256,
+      model: "deepseek-v4-flash",
+      runId: "run_untagged_final_answer",
+      sessionId: "sess_untagged_final_answer",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+    }),
+  );
+  const deltas = events.filter(
+    (event): event is Extract<AgentEvent, { type: "assistant.delta" }> =>
+      event.type === "assistant.delta",
+  );
+  const answerStartIndex = events.findIndex(
+    (event) => event.type === "assistant.answer.started",
+  );
+
+  assert.equal(deltas.length, 3);
+  assert.ok(answerStartIndex >= 0);
+  assert.ok(
+    events.findIndex((event) => event.type === "assistant.delta") > answerStartIndex,
+  );
+  assert.equal(
+    visibleAssistantText(events),
+    "# 最后一位记账员\n\n老周在这个柜台后面坐了三十七年。".repeat(8) +
+      "\n\n后来，他发现账本里多了一条不存在的支出。" +
+      "\n\n故事到这里才真正开始。",
+  );
 });

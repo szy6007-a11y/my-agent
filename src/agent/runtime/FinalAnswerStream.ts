@@ -1,5 +1,6 @@
 const FINAL_ANSWER_OPEN_TAG = "<final_answer>";
 const FINAL_ANSWER_CLOSE_TAG = "</final_answer>";
+const UNTAGGED_FALLBACK_START_CHARS = 160;
 
 export type FinalAnswerStreamChunk = {
   answerClosed: boolean;
@@ -78,8 +79,23 @@ export class FinalAnswerStream {
 
     this.beforeAnswerBuffer += text;
     const openIndex = indexOfIgnoreCase(this.beforeAnswerBuffer, FINAL_ANSWER_OPEN_TAG);
-    if (openIndex === -1) {
+    if (
+      openIndex === -1 &&
+      this.beforeAnswerBuffer.length < UNTAGGED_FALLBACK_START_CHARS
+    ) {
       return emptyChunk();
+    }
+
+    if (openIndex === -1) {
+      const fallbackText = stripFinalAnswerProtocolTags(this.beforeAnswerBuffer);
+      this.beforeAnswerBuffer = "";
+      this.phase = "answer";
+      return {
+        answerClosed: false,
+        answerStarted: true,
+        answerText: fallbackText,
+        hiddenText: "",
+      };
     }
 
     const hiddenText = this.beforeAnswerBuffer.slice(0, openIndex);

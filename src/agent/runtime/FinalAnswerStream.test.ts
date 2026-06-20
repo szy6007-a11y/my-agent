@@ -85,6 +85,23 @@ test("FinalAnswerStream returns untagged text as fallback answer", () => {
   });
 });
 
+test("FinalAnswerStream streams long untagged fallback answers after a short buffer", () => {
+  const stream = new FinalAnswerStream();
+  const opening = "# 最后一位记账员\n\n老周在这个柜台后面坐了三十七年。".repeat(8);
+
+  const first = stream.push(opening);
+  const second = stream.push("\n\n后来，他发现账本里多了一条不存在的支出。");
+
+  assert.equal(first.answerStarted, true);
+  assert.equal(first.answerText, opening);
+  assert.equal(second.answerText, "\n\n后来，他发现账本里多了一条不存在的支出。");
+  assert.deepEqual(stream.finish(), {
+    answerText: "",
+    fallbackAnswerText: "",
+    hiddenText: "",
+  });
+});
+
 test("stripFinalAnswerProtocolTags removes wrapper tags case-insensitively", () => {
   assert.equal(
     stripFinalAnswerProtocolTags("<FINAL_ANSWER>ok</Final_Answer>"),
