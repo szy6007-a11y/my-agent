@@ -1090,10 +1090,13 @@ body > button[aria-label="Open Next.js Dev Tools"],
 .run-panel {
   display: grid;
   gap: 8px;
+  max-height: min(42vh, 360px);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.08);
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 8px;
 }
 
@@ -1165,12 +1168,13 @@ body > button[aria-label="Open Next.js Dev Tools"],
   display: grid;
   gap: 8px;
   border-top: 1px solid #eeeeee;
+  min-width: 0;
   padding-top: 8px;
 }
 
 .task-panel-header {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto 28px;
   gap: 8px;
   align-items: center;
   min-width: 0;
@@ -1229,6 +1233,35 @@ body > button[aria-label="Open Next.js Dev Tools"],
   padding: 3px 7px;
 }
 
+.task-panel-toggle {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #e6e6e6;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #555555;
+  cursor: pointer;
+}
+
+.task-panel-toggle:hover {
+  background: #f6f6f6;
+}
+
+.task-panel-toggle:focus-visible {
+  outline: 2px solid #9b9b9b;
+  outline-offset: 2px;
+}
+
+.task-panel-toggle svg {
+  transition: transform 160ms ease;
+}
+
+.task-panel.expanded .task-panel-toggle svg {
+  transform: rotate(180deg);
+}
+
 .task-progress {
   height: 4px;
   overflow: hidden;
@@ -1250,6 +1283,14 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
 .task-panel.attention .task-progress span {
   background: #dc2626;
+}
+
+.task-panel-details {
+  display: grid;
+  max-height: min(28vh, 250px);
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .task-card {
@@ -1355,6 +1396,10 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .task-card-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: #555555;
   font-size: 11px;
   line-height: 1.35;

@@ -546,7 +546,17 @@ function TaskStatusIcon({ status }: { status: AgentTaskSummary["status"] }) {
   return <CircleStop size={15} />;
 }
 
-function TaskPanel({ syncedAt, tasks }: { syncedAt: string | null; tasks: TaskCardState[] }) {
+function TaskPanel({
+  expanded,
+  onToggle,
+  syncedAt,
+  tasks,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  syncedAt: string | null;
+  tasks: TaskCardState[];
+}) {
   if (tasks.length === 0) {
     return null;
   }
@@ -572,7 +582,7 @@ function TaskPanel({ syncedAt, tasks }: { syncedAt: string | null; tasks: TaskCa
     : "complete";
 
   return (
-    <div className={`task-panel ${panelState}`} aria-label="任务状态">
+    <div className={`task-panel ${panelState} ${expanded ? "expanded" : "collapsed"}`} aria-label="任务状态">
       <div className="task-panel-header">
         <span className="task-panel-pulse" aria-hidden="true" />
         <span className="task-panel-title">
@@ -580,44 +590,57 @@ function TaskPanel({ syncedAt, tasks }: { syncedAt: string | null; tasks: TaskCa
           <span>{summary}</span>
         </span>
         <span className="task-panel-sync">{formatSyncedAt(syncedAt)}</span>
+        <button
+          aria-label={expanded ? "收起后台任务详情" : "展开后台任务详情"}
+          className="task-panel-toggle"
+          onClick={onToggle}
+          title={expanded ? "收起后台任务详情" : "展开后台任务详情"}
+          type="button"
+        >
+          <ChevronDown size={16} />
+        </button>
       </div>
       <div className="task-progress" aria-hidden="true">
         <span style={{ width: `${progress}%` }} />
       </div>
-      {tasks.map((task) => {
-        const detail =
-          task.status === "completed" ?
-            task.resultPreview || "已完成，结果已写回当前会话"
-          : taskNeedsAttention(task) ?
-            task.error || "任务没有正常完成"
-          : task.lastActivity ||
-            task.activeForm ||
-            (task.kind === "subagent" ? "正在后台运行，当前对话可继续" : "") ||
-            task.description ||
-            task.goal ||
-            "";
-        const duration = formatTaskDuration(task);
-        return (
-          <div className={`task-card ${task.kind} ${task.status}`} key={task.id}>
-            <span className="task-card-icon" aria-hidden="true">
-              <TaskStatusIcon status={task.status} />
-            </span>
-            <span className="task-card-copy">
-              <span className="task-card-head">
-                <strong>{task.subject}</strong>
-                <span>{task.kind === "subagent" ? "后台子代理" : "主线任务"}</span>
-              </span>
-              {detail && <small>{detail}</small>}
-              <span className="task-card-meta">
-                <span>{taskStatusLabel(task.status)}</span>
-                <span>{shortTaskId(task.id)}</span>
-                {task.childRunId && <span>run {shortRunId(task.childRunId)}</span>}
-                {duration && <span>{duration}</span>}
-              </span>
-            </span>
-          </div>
-        );
-      })}
+      {expanded && (
+        <div className="task-panel-details">
+          {tasks.map((task) => {
+            const detail =
+              task.status === "completed" ?
+                task.resultPreview || "已完成，结果已写回当前会话"
+              : taskNeedsAttention(task) ?
+                task.error || "任务没有正常完成"
+              : task.lastActivity ||
+                task.activeForm ||
+                (task.kind === "subagent" ? "正在后台运行，当前对话可继续" : "") ||
+                task.description ||
+                task.goal ||
+                "";
+            const duration = formatTaskDuration(task);
+            return (
+              <div className={`task-card ${task.kind} ${task.status}`} key={task.id}>
+                <span className="task-card-icon" aria-hidden="true">
+                  <TaskStatusIcon status={task.status} />
+                </span>
+                <span className="task-card-copy">
+                  <span className="task-card-head">
+                    <strong>{task.subject}</strong>
+                    <span>{task.kind === "subagent" ? "后台子代理" : "主线任务"}</span>
+                  </span>
+                  {detail && <small>{detail}</small>}
+                  <span className="task-card-meta">
+                    <span>{taskStatusLabel(task.status)}</span>
+                    <span>{shortTaskId(task.id)}</span>
+                    {task.childRunId && <span>run {shortRunId(task.childRunId)}</span>}
+                    {duration && <span>{duration}</span>}
+                  </span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -942,6 +965,7 @@ export function ChatWorkspace() {
   const [activeRun, setActiveRun] = useState<ActiveRunState | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentTasks, setAgentTasks] = useState<TaskCardState[]>([]);
+  const [taskPanelExpanded, setTaskPanelExpanded] = useState(false);
   const [taskSyncedAt, setTaskSyncedAt] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
@@ -1074,6 +1098,7 @@ export function ChatWorkspace() {
     setActiveRun(null);
     setPendingApprovals([]);
     setAgentTasks([]);
+    setTaskPanelExpanded(false);
     setTaskSyncedAt(null);
     setMonitorConnection("connecting");
     setServiceSnapshot(null);
@@ -1484,6 +1509,7 @@ export function ChatWorkspace() {
     setMessages([]);
     setSessionId(null);
     setAgentTasks([]);
+    setTaskPanelExpanded(false);
     setTaskSyncedAt(null);
     setShowScrollToBottom(false);
   }
@@ -1517,6 +1543,7 @@ export function ChatWorkspace() {
 
       setSessionId(body.session?.id ?? nextSessionId);
       setAgentTasks([]);
+      setTaskPanelExpanded(false);
       setTaskSyncedAt(null);
       taskCompletionSignatureRef.current = "";
       autoScrollRef.current = true;
@@ -1566,6 +1593,7 @@ export function ChatWorkspace() {
     setPendingApprovals([]);
     if (!sessionId) {
       setAgentTasks([]);
+      setTaskPanelExpanded(false);
       setTaskSyncedAt(null);
       taskCompletionSignatureRef.current = "";
     }
@@ -2435,7 +2463,12 @@ export function ChatWorkspace() {
                   </span>
                 </div>
               )}
-              <TaskPanel syncedAt={taskSyncedAt} tasks={agentTasks} />
+              <TaskPanel
+                expanded={taskPanelExpanded}
+                onToggle={() => setTaskPanelExpanded((current) => !current)}
+                syncedAt={taskSyncedAt}
+                tasks={agentTasks}
+              />
               {pendingApprovals.map((approval) => {
                 const questionRequest = askUserQuestionRequestFromApproval(approval.request);
                 if (questionRequest) {
