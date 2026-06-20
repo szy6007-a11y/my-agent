@@ -17,6 +17,7 @@ import type { WebExtractDocument } from "@/agent/web/types";
 import { validateExternalUrl } from "@/agent/web/urlSafety";
 import type { AgentTool } from "@/agent/tools/types";
 import { toolError, toolSuccess } from "@/agent/tools/types";
+import type { WebSearchResponse } from "@/agent/web/types";
 
 type WebSearchArgs = {
   allowed_domains?: unknown;
@@ -64,6 +65,26 @@ function asStringArray(value: unknown): string[] {
 
 function asFormat(value: unknown): "html" | "markdown" | "text" {
   return value === "html" || value === "text" || value === "markdown" ? value : "markdown";
+}
+
+function formatSearchResult(
+  result: WebSearchResponse,
+  fallback?: { from: string; reason: string },
+): string {
+  if (!result.success) {
+    return JSON.stringify(fallback ? { ...result, fallback } : result);
+  }
+
+  return JSON.stringify({
+    ...result,
+    ...(fallback ? { fallback } : {}),
+    citations:
+      "When using web_search results, cite sources with markdown links and do not imply unsupported facts.",
+    sources: result.data.web.map((item) => ({
+      title: item.title,
+      url: item.url,
+    })),
+  });
 }
 
 async function validateExtractUrls(rawUrls: unknown) {
@@ -161,26 +182,33 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
         return toolError("No web search provider configured.");
       }
 
-      const result = await provider.search(query, clampInt(input.limit, configuredWebSearchLimit(), 1, 100), {
+      const limit = clampInt(input.limit, configuredWebSearchLimit(), 1, 100);
+      const options = {
         allowedDomains: asStringArray(input.allowed_domains),
         blockedDomains: asStringArray(input.blocked_domains),
         signal: context.signal,
         timeoutMs: configuredWebTimeoutMs(),
-      });
+      };
+      const result = await provider.search(query, limit, options);
 
       if (!result.success) {
-        return JSON.stringify(result);
+        const fallbackProvider = registry.getFallbackProvider("search", provider);
+        if (!context.signal?.aborted && fallbackProvider?.search) {
+          const fallbackResult = await fallbackProvider.search(query, limit, options);
+          const fallback = { from: provider.name, reason: result.error };
+          if (fallbackResult.success) {
+            return formatSearchResult(fallbackResult, fallback);
+          }
+          return formatSearchResult({
+            error: `${result.error} Fallback ${fallbackProvider.name} also failed: ${fallbackResult.error}`,
+            provider: provider.name,
+            success: false,
+          });
+        }
+        return formatSearchResult(result);
       }
 
-      return JSON.stringify({
-        ...result,
-        citations:
-          "When using web_search results, cite sources with markdown links and do not imply unsupported facts.",
-        sources: result.data.web.map((item) => ({
-          title: item.title,
-          url: item.url,
-        })),
-      });
+      return formatSearchResult(result);
     },
   };
 

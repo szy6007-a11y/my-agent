@@ -76,6 +76,64 @@ test("web_search tool is advertised and returns provider-normalized sources", as
   assert.deepEqual(result.sources, [{ title: "Result", url: "https://example.com/result" }]);
 });
 
+test("web_search falls back to ddgs when firecrawl fails", async () => {
+  const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
+  const firecrawlProvider: WebSearchProvider = {
+    displayName: "Firecrawl",
+    isAvailable: () => true,
+    name: "firecrawl",
+    search: async () => ({
+      error: "FIRECRAWL_API_KEY or FIRECRAWL_API_URL is not set.",
+      provider: "firecrawl",
+      success: false,
+    }),
+    supportsExtract: () => false,
+    supportsSearch: () => true,
+  };
+  const ddgsProvider: WebSearchProvider = {
+    displayName: "DuckDuckGo (ddgs)",
+    isAvailable: () => true,
+    name: "ddgs",
+    search: async (query) => ({
+      data: {
+        web: [
+          {
+            description: "Duck result",
+            position: 1,
+            title: "Duck",
+            url: "https://example.com/duck",
+          },
+        ],
+      },
+      provider: "ddgs",
+      query,
+      success: true,
+    }),
+    supportsExtract: () => false,
+    supportsSearch: () => true,
+  };
+  const registry = new ToolRegistry(
+    createWebTools(new WebSearchRegistry([firecrawlProvider, ddgsProvider])),
+  );
+
+  const result = JSON.parse(
+    await registry.execute(makeToolCall("web_search", { query: "agent search", limit: 1 }), makeContext()),
+  ) as {
+    fallback: { from: string; reason: string };
+    provider: string;
+    sources: Array<{ title: string; url: string }>;
+    success: boolean;
+  };
+
+  assert.equal(result.success, true);
+  assert.equal(result.provider, "ddgs");
+  assert.deepEqual(result.fallback, {
+    from: "firecrawl",
+    reason: "FIRECRAWL_API_KEY or FIRECRAWL_API_URL is not set.",
+  });
+  assert.deepEqual(result.sources, [{ title: "Duck", url: "https://example.com/duck" }]);
+});
+
 test("web_extract blocks private and secret-bearing URLs before provider execution", async () => {
   const { createWebTools, ToolRegistry, WebSearchRegistry } = await loadWebToolModules();
   let called = false;

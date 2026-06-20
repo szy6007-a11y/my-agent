@@ -1,4 +1,8 @@
-import { configuredProvider, hasExplicitProvider } from "@/agent/web/env";
+import {
+  configuredFallbackProvider,
+  configuredProvider,
+  hasExplicitProvider,
+} from "@/agent/web/env";
 import { createBuiltInWebProviders } from "@/agent/web/providers";
 import type { WebCapability, WebProviderName, WebSearchProvider } from "@/agent/web/types";
 
@@ -72,12 +76,25 @@ export class WebSearchRegistry {
     return null;
   }
 
+  getFallbackProvider(
+    capability: WebCapability,
+    primary?: WebSearchProvider | null,
+  ): WebSearchProvider | null {
+    const fallbackName = configuredFallbackProvider(capability);
+    const fallback = this.get(fallbackName);
+    if (!fallback || fallback.name === primary?.name || !supports(fallback, capability)) {
+      return null;
+    }
+    return isAvailable(fallback) ? fallback : null;
+  }
+
   hasEnabledTool(capability: WebCapability): boolean {
     const active = this.getActiveProvider(capability);
-    if (!active) {
+    const fallback = this.getFallbackProvider(capability, active);
+    if (!active && !fallback) {
       return false;
     }
-    return isAvailable(active) || hasExplicitProvider(capability);
+    return Boolean((active && (isAvailable(active) || hasExplicitProvider(capability))) || fallback);
   }
 }
 

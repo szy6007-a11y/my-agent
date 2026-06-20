@@ -66,6 +66,19 @@ test("WebSearchRegistry follows Hermes legacy auto-detect preference", () => {
   });
 });
 
+test("WebSearchRegistry defaults search fallback to ddgs", () => {
+  withEnv("WEB_SEARCH_FALLBACK_PROVIDER", undefined, () => {
+    const firecrawl = provider({ available: true, name: "firecrawl", search: true });
+    const registry = new WebSearchRegistry([
+      firecrawl,
+      provider({ available: true, name: "ddgs", search: true }),
+    ]);
+
+    assert.equal(registry.getFallbackProvider("search", firecrawl)?.name, "ddgs");
+    assert.equal(registry.getFallbackProvider("extract", firecrawl), null);
+  });
+});
+
 test("WebSearchRegistry does not enable extract for search-only providers", () => {
   withEnv("WEB_EXTRACT_PROVIDER", undefined, () => {
     const registry = new WebSearchRegistry([

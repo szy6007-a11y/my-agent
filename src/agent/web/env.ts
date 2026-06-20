@@ -57,6 +57,16 @@ export function configuredProvider(capability: WebCapability): WebProviderName |
   return PROVIDER_NAMES.has(raw as WebProviderName) ? (raw as WebProviderName) : undefined;
 }
 
+export function configuredFallbackProvider(
+  capability: WebCapability,
+): WebProviderName | undefined {
+  if (capability !== "search") {
+    return undefined;
+  }
+  const raw = (envValue("WEB_SEARCH_FALLBACK_PROVIDER") || "ddgs").toLowerCase();
+  return PROVIDER_NAMES.has(raw as WebProviderName) ? (raw as WebProviderName) : undefined;
+}
+
 export function hasExplicitProvider(capability: WebCapability): boolean {
   return Boolean(configuredProvider(capability));
 }
