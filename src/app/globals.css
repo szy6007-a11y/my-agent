@@ -164,6 +164,10 @@ body > button[aria-label="Open Next.js Dev Tools"],
   overflow: hidden;
 }
 
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 292px;
+}
+
 .sidebar {
   display: flex;
   min-height: 0;
@@ -173,6 +177,11 @@ body > button[aria-label="Open Next.js Dev Tools"],
   border-right: 1px solid var(--border);
   background: #f8f8f8;
   padding: 14px 12px;
+}
+
+.sidebar[aria-hidden="true"] {
+  border-right: 0;
+  padding: 0;
 }
 
 .brand-row,
@@ -204,6 +213,19 @@ body > button[aria-label="Open Next.js Dev Tools"],
 .nav-item:hover,
 .chat-link:hover {
   background: var(--muted-strong);
+}
+
+.sidebar-expand-button {
+  position: absolute;
+  z-index: 5;
+  top: 14px;
+  left: 14px;
+  background: #ffffff;
+  box-shadow: 0 1px 6px rgba(15, 15, 15, 0.08);
+}
+
+.sidebar-expand-button:hover {
+  background: #ededed;
 }
 
 .nav-stack,

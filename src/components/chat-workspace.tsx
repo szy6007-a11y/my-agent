@@ -950,6 +950,7 @@ export function ChatWorkspace({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedShareMessageId, setCopiedShareMessageId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -2395,76 +2396,98 @@ export function ChatWorkspace({
   );
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-row">
-          <strong>My Agent</strong>
-          <button className="icon-button" aria-label="折叠侧栏">
-            <PanelsLeftBottom size={18} />
-          </button>
-        </div>
-
-        <nav className="nav-stack" aria-label="主导航">
-          <button className="nav-item active" onClick={startNewChat} type="button">
-            <Plus size={17} />
-            新聊天
-          </button>
-          <button className="nav-item" type="button">
-            <Search size={17} />
-            搜索聊天
-          </button>
-          <button className="nav-item" type="button">
-            <Library size={17} />
-            库
-          </button>
-          <button className="nav-item" type="button">
-            <MoreHorizontal size={17} />
-            更多
-          </button>
-        </nav>
-
-        <section className="chat-list">
-          <p className="section-label">会话</p>
-          {sessions.length > 0 ?
-            sessions.map((chatSession) => (
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <aside className="sidebar" aria-hidden={sidebarCollapsed}>
+        {!sidebarCollapsed && (
+          <>
+            <div className="brand-row">
+              <strong>My Agent</strong>
               <button
-                className={`chat-link ${chatSession.id === sessionId ? "active" : ""}`}
-                disabled={isLoadingSession}
-                key={chatSession.id}
-                onClick={() => void openSession(chatSession.id)}
+                className="icon-button"
+                aria-label="折叠侧栏"
+                onClick={() => setSidebarCollapsed(true)}
+                title="折叠侧栏"
                 type="button"
               >
-                <strong>{chatSession.title}</strong>
-                <span>
-                  {chatSession.messageCount} 条 · {formatSessionTime(chatSession.updatedAt)}
-                </span>
+                <PanelsLeftBottom size={18} />
               </button>
-            ))
-          : <div className="sidebar-state">
-              <strong>{sessionLabel}</strong>
-              <span>{messages.length > 0 ? `${messages.length} 条消息` : "发送消息后开始"}</span>
-            </div>}
-        </section>
+            </div>
 
-        <div className="account-row">
-          <span className="avatar">{environmentLabel(authUser?.environment).slice(0, 1)}</span>
-          <span className="account-details">
-            <strong>{displayUserName(authUser)}</strong>
-            <small>{environmentLabel(authUser?.environment)}</small>
-          </span>
-          <button
-            className="icon-button account-logout"
-            onClick={() => void logout()}
-            type="button"
-            aria-label="退出登录"
-            title="退出登录"
-          >
-            <LogOut size={17} />
-          </button>
-        </div>
+            <nav className="nav-stack" aria-label="主导航">
+              <button className="nav-item active" onClick={startNewChat} type="button">
+                <Plus size={17} />
+                新聊天
+              </button>
+              <button className="nav-item" type="button">
+                <Search size={17} />
+                搜索聊天
+              </button>
+              <button className="nav-item" type="button">
+                <Library size={17} />
+                库
+              </button>
+              <button className="nav-item" type="button">
+                <MoreHorizontal size={17} />
+                更多
+              </button>
+            </nav>
+
+            <section className="chat-list">
+              <p className="section-label">会话</p>
+              {sessions.length > 0 ?
+                sessions.map((chatSession) => (
+                  <button
+                    className={`chat-link ${chatSession.id === sessionId ? "active" : ""}`}
+                    disabled={isLoadingSession}
+                    key={chatSession.id}
+                    onClick={() => void openSession(chatSession.id)}
+                    type="button"
+                  >
+                    <strong>{chatSession.title}</strong>
+                    <span>
+                      {chatSession.messageCount} 条 · {formatSessionTime(chatSession.updatedAt)}
+                    </span>
+                  </button>
+                ))
+              : <div className="sidebar-state">
+                  <strong>{sessionLabel}</strong>
+                  <span>{messages.length > 0 ? `${messages.length} 条消息` : "发送消息后开始"}</span>
+                </div>}
+            </section>
+
+            <div className="account-row">
+              <span className="avatar">{environmentLabel(authUser?.environment).slice(0, 1)}</span>
+              <span className="account-details">
+                <strong>{displayUserName(authUser)}</strong>
+                <small>{environmentLabel(authUser?.environment)}</small>
+              </span>
+              <button
+                className="icon-button account-logout"
+                onClick={() => void logout()}
+                type="button"
+                aria-label="退出登录"
+                title="退出登录"
+              >
+                <LogOut size={17} />
+              </button>
+            </div>
+          </>
+        )}
       </aside>
 
       <section className="workspace">
+        {sidebarCollapsed && (
+          <button
+            className="icon-button sidebar-expand-button"
+            aria-label="展开侧栏"
+            onClick={() => setSidebarCollapsed(false)}
+            title="展开侧栏"
+            type="button"
+          >
+            <PanelsLeftBottom size={18} />
+          </button>
+        )}
+
         <div
           className="messages"
           aria-live="polite"
