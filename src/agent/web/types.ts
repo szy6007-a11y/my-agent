@@ -25,6 +25,25 @@ export type GitHubRepositoryMetadata = {
   updated_at: string;
 };
 
+export type MarketDataObservation = {
+  currency?: string;
+  date: string;
+  field: "close";
+  frequency: "daily";
+  instrument: string;
+  note: string;
+  provider_symbol: string;
+  requested_date: string;
+  retrieved_at: string;
+  source: "yahoo_chart";
+  source_name: string;
+  source_url: string;
+  status: "as_of_requested_date" | "latest_available_before_requested_date";
+  symbol: string;
+  value: number;
+  value_formatted: string;
+};
+
 export type WebSearchResult = {
   description: string;
   metadata?: {
@@ -37,6 +56,7 @@ export type WebSearchResult = {
 
 export type WebSearchSuccess = {
   data: {
+    market_data?: MarketDataObservation[];
     web: WebSearchResult[];
   };
   provider: string;
