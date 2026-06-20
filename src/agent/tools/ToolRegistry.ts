@@ -108,6 +108,10 @@ export class ToolRegistry {
     return [...this.tools.keys()];
   }
 
+  filter(predicate: (tool: AgentTool) => boolean): ToolRegistry {
+    return new ToolRegistry([...this.tools.values()].filter(predicate));
+  }
+
   get manifest(): ToolUiManifest[] {
     return [...this.tools.values()].map((tool) => {
       const isReadOnly = tool.isReadOnly === true;

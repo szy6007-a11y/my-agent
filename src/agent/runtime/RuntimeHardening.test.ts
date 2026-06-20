@@ -196,6 +196,41 @@ class MissingFinalAnswerThenFinalModelRouter {
   }
 }
 
+class FinalAnswerToolCallThenFinalModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: "{}",
+            id: "call_final_answer",
+            name: "final_answer",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield {
+      type: "text_delta" as const,
+      text: "<final_answer>这是恢复后的查询回答。</final_answer>",
+    };
+  }
+}
+
+class CaptureToolsModelRouter {
+  readonly toolNames: string[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.toolNames.push((input.tools ?? []).map((tool) => tool.function.name));
+    yield { type: "text_delta" as const, text: "<final_answer>ok</final_answer>" };
+  }
+}
+
 class VisibleToolThenFinalModelRouter {
   readonly payloads: ModelMessage[][] = [];
 
@@ -710,6 +745,145 @@ test("AgentLoop recovers once when the model omits final_answer tags", async () 
   );
   assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), false);
   assert.equal(sessions.messages.at(-1)?.content, "这是恢复后的最终回答。");
+});
+
+test("AgentLoop treats final_answer native tool calls as protocol misuse", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "明天是什么日子？帮我查查明天股票是否开盘？",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new FinalAnswerToolCallThenFinalModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      runId: "run_final_answer_tool_call",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  assert.equal(modelRouter.payloads.length, 2);
+  assert.deepEqual(
+    events.find((event) => event.type === "protocol.recovery"),
+    {
+      reason: "missing_final_answer",
+      retryAttempt: 1,
+      runId: "run_final_answer_tool_call",
+      toolName: "final_answer",
+      type: "protocol.recovery",
+    },
+  );
+  assert.equal(
+    events.some((event) => event.type === "tool.started" && event.toolName === "final_answer"),
+    false,
+  );
+  assert.equal(
+    sessions.messages.some(
+      (message) => message.toolName === "final_answer" || message.toolCallId === "call_final_answer",
+    ),
+    false,
+  );
+  assert.equal(sessions.messages.at(-1)?.content, "这是恢复后的查询回答。");
+});
+
+test("AgentLoop hides mutating file tools for ordinary questions", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "明天是什么日子？帮我查查明天股票是否开盘？查查明天南京有什么活动",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new CaptureToolsModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      runId: "run_ordinary_question_tools",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  const names = modelRouter.toolNames[0] ?? [];
+  assert.ok(names.includes("web_search"));
+  assert.ok(!names.includes("write_file"));
+  assert.ok(!names.includes("write_file_chunk"));
+  assert.ok(!names.includes("edit_file"));
+});
+
+test("AgentLoop exposes mutating file tools for explicit file artifact requests", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "请把这次调研结果保存成 markdown 文件并提供下载",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new CaptureToolsModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      runId: "run_file_request_tools",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  const names = modelRouter.toolNames[0] ?? [];
+  assert.ok(names.includes("write_file"));
+  assert.ok(names.includes("write_file_chunk"));
+  assert.ok(names.includes("edit_file"));
 });
 
 test("AgentLoop recovers when the model writes a visible DeepSeek DSML tool call", async () => {

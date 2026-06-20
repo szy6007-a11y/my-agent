@@ -62,6 +62,17 @@ const EMPTY_ASSISTANT_FALLBACK = "我没有生成有效回复，请再试一次�
 const MISSING_FINAL_ANSWER_FALLBACK = "模型没有生成有效最终回复，请再试一次。";
 const VISIBLE_TOOL_CALL_CORRECTION_MARKER = "[protocol-correction:visible_tool_call]";
 const MISSING_FINAL_ANSWER_CORRECTION_MARKER = "[protocol-correction:missing_final_answer]";
+const PROTOCOL_BOUNDARY_TOOL_NAMES = new Set(["final_answer"]);
+const FILE_WRITE_TOOL_NAMES = new Set(["write_file", "write_file_chunk", "edit_file"]);
+const FILE_WRITE_CONTINUATION_PATTERN =
+  /^(?:继续|继续吧|接着|接着来|可以|好的|确认|同意|go on|continue|resume|yes|ok)[。！!.\s]*$/i;
+const FILE_WRITE_INTENT_PATTERNS = [
+  /(?:创建|新建|生成|写入|保存|导出|下载|产出|制作|编辑|修改|覆盖|替换|更新).{0,32}(?:文件|文档|报告|网页|页面|html|ppt|幻灯片|markdown|md|csv|json|xlsx|docx|pdf|artifact|附件|可下载)/i,
+  /(?:文件|文档|报告|网页|页面|html|ppt|幻灯片|markdown|md|csv|json|xlsx|docx|pdf|artifact|附件|可下载).{0,32}(?:创建|新建|生成|写入|保存|导出|下载|编辑|修改|覆盖|替换|更新)/i,
+  /(?:保存成|导出成|下载成|写到|写入到|存成|另存为|生成一个可下载|生成可下载)/i,
+  /\b(?:create|write|save|export|download|generate|build|edit|modify|overwrite|update)\b[\s\S]{0,80}\b(?:file|document|report|html|ppt|markdown|md|csv|json|xlsx|docx|pdf|artifact|webpage|page)\b/i,
+  /\b(?:file|document|report|html|ppt|markdown|md|csv|json|xlsx|docx|pdf|artifact|webpage|page)\b[\s\S]{0,80}\b(?:create|write|save|export|download|generate|build|edit|modify|overwrite|update)\b/i,
+];
 
 export interface AgentLoopOptions {
   backgroundReview?: boolean;
@@ -175,6 +186,17 @@ ${originalQuestion}
 如果仍需要使用工具，请先通过原生 tool call 调用对应工具；工具完成后再输出 <final_answer>...</final_answer> 和给用户看的完整中文答复。禁止在最终回答里手写工具 XML/JSON/函数调用文本。`;
 }
 
+function buildProtocolBoundaryToolCallCorrection(
+  toolName: string,
+  originalQuestion: string,
+): string {
+  return `上一轮模型把文本边界标签 <${toolName}> 误当成了原生工具调用，但 ${toolName} 不是工具，不能用 native tool call 调用这个名字。
+请重新完成用户本轮真实问题，不要重新询问用户，不要丢弃已经完成的判断。
+必须把最终用户可见回答作为普通文本字面量完整放在 <final_answer>...</final_answer> 内：
+${originalQuestion}
+如果仍需要使用工具，只能调用 available_tools 里真实存在的工具；工具完成后再输出文本字面量 <final_answer>...</final_answer>。`;
+}
+
 function appendProtocolCorrection(
   content: string,
   marker: string,
@@ -230,6 +252,61 @@ function isContextOverflowError(error: unknown): boolean {
 
 function toolRisk(tool: AgentTool | undefined): ToolRisk {
   return tool?.risk ?? (tool?.isReadOnly ? "read" : "write");
+}
+
+function normalizedToolName(name: string): string {
+  return name.trim().toLowerCase().replace(/^functions\./, "");
+}
+
+function isProtocolBoundaryToolCall(toolCall: ModelToolCall): boolean {
+  return PROTOCOL_BOUNDARY_TOOL_NAMES.has(normalizedToolName(toolCall.name));
+}
+
+function isFileWriteToolName(name: string): boolean {
+  return FILE_WRITE_TOOL_NAMES.has(normalizedToolName(name));
+}
+
+function messageRequestsFileWrite(content: string): boolean {
+  return FILE_WRITE_INTENT_PATTERNS.some((pattern) => pattern.test(content));
+}
+
+function recentConversationRequestedFileWrite(
+  messages: AgentMessage[],
+  targetMessageId?: string,
+): boolean {
+  const targetIndex =
+    targetMessageId ?
+      messages.findIndex((message) => message.id === targetMessageId)
+    : messages.length - 1;
+  const endIndex = targetIndex >= 0 ? targetIndex : messages.length - 1;
+  const recent = messages.slice(Math.max(0, endIndex - 8), endIndex);
+  return recent.some(
+    (message) => message.role === "user" && messageRequestsFileWrite(stripTrustedSystemReminder(message.content)),
+  );
+}
+
+function shouldExposeFileWriteTools(messages: AgentMessage[], targetMessageId?: string): boolean {
+  const userQuestion = latestUserQuestion(messages, targetMessageId);
+  if (messageRequestsFileWrite(userQuestion)) {
+    return true;
+  }
+
+  return (
+    FILE_WRITE_CONTINUATION_PATTERN.test(userQuestion) &&
+    recentConversationRequestedFileWrite(messages, targetMessageId)
+  );
+}
+
+function selectToolsForTurn(
+  tools: ToolRegistry,
+  messages: AgentMessage[],
+  targetMessageId?: string,
+): ToolRegistry {
+  if (shouldExposeFileWriteTools(messages, targetMessageId)) {
+    return tools;
+  }
+
+  return tools.filter((tool) => !isFileWriteToolName(tool.name));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -325,7 +402,7 @@ export class AgentLoop {
     thinking: "enabled" | "disabled";
     signal: AbortSignal;
   }): AsyncGenerator<AgentEvent> {
-    const tools = this.createTools();
+    const fullTools = this.createTools();
     const maxToolRounds = resolveMaxToolRounds(this.options.maxToolRounds);
     const permissionMode = input.permissionMode ?? "ask-on-write";
     const readFileState = new FileReadState();
@@ -380,6 +457,7 @@ export class AgentLoop {
       limit: 180,
       userId: input.userId,
     });
+    const tools = selectToolsForTurn(fullTools, history, input.userMessageId);
     const preModelHookResult = await this.hooks.runPreModelCall({
       iteration: 0,
       lastUserMessage:
@@ -889,6 +967,30 @@ export class AgentLoop {
             messageId: assistantMessageId,
             text: assistantToolContent,
           };
+        }
+
+        const protocolBoundaryToolCall = toolCalls.find(isProtocolBoundaryToolCall);
+        if (
+          protocolBoundaryToolCall &&
+          missingFinalAnswerRecoveryAttempts < MAX_PROTOCOL_RECOVERY_ATTEMPTS
+        ) {
+          missingFinalAnswerRecoveryAttempts += 1;
+          const correction = buildProtocolBoundaryToolCallCorrection(
+            protocolBoundaryToolCall.name,
+            latestUserQuestion(history, input.userMessageId),
+          );
+          workingMessages.push({
+            role: "user",
+            content: `${MISSING_FINAL_ANSWER_CORRECTION_MARKER}\n${correction}`,
+          });
+          yield {
+            type: "protocol.recovery",
+            reason: "missing_final_answer",
+            retryAttempt: missingFinalAnswerRecoveryAttempts,
+            runId: input.runId,
+            toolName: protocolBoundaryToolCall.name,
+          };
+          continue;
         }
 
         workingMessages.push({

@@ -46,7 +46,7 @@ export type PromptAssemblerInput = {
   userId?: string;
 };
 
-const PROMPT_VERSION = "2026-06-20.final-answer-protocol-v1";
+const PROMPT_VERSION = "2026-06-20.final-answer-tool-boundary-v2";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 const TOOL_USE_ENFORCEMENT_MODELS = [
   "gpt",

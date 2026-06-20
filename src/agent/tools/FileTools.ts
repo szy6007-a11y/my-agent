@@ -343,7 +343,7 @@ export function createFileTools(): AgentTool[] {
     definition: {
       function: {
         description:
-          "Incrementally create or overwrite a large text file in the current session workspace without sending the entire file in one tool call. Use this for generated HTML/PPT/report artifacts or any file likely over 40 KB. Send chunks in order with sequence starting at 1; each chunk must be at most 64 KiB. Prefer chunks close to that limit, while staying valid, so long files finish within the agent iteration budget. Use sequence=1 to create/truncate the file, then sequence=2,3,... to append. Set final=true only on the last chunk to publish the downloadable artifact. Existing files must be read with read_file before sequence=1.",
+          "Incrementally create or overwrite a large text file in the current session workspace without sending the entire file in one tool call. Use only when the user explicitly asks to create, save, export, download, or overwrite a file/artifact; do not use for ordinary Q&A, search, explanation, summaries, dates, stocks, or event queries. Use this for generated HTML/PPT/report artifacts or any file likely over 40 KB. Send chunks in order with sequence starting at 1; each chunk must be at most 64 KiB. Prefer chunks close to that limit, while staying valid, so long files finish within the agent iteration budget. Use sequence=1 to create/truncate the file, then sequence=2,3,... to append. Set final=true only on the last chunk to publish the downloadable artifact. Existing files must be read with read_file before sequence=1.",
         name: "write_file_chunk",
         parameters: {
           additionalProperties: false,
@@ -556,7 +556,7 @@ export function createFileTools(): AgentTool[] {
     definition: {
       function: {
         description:
-          "Create or overwrite a small text file in the current session workspace. Existing files must be read with read_file first. Returns a downloadable artifact for the written file. For generated HTML/PPT/report artifacts or content likely over 40 KB, use write_file_chunk instead so the model does not send the whole file in one tool call.",
+          "Create or overwrite a small text file in the current session workspace. Use only when the user explicitly asks to create, save, export, download, or overwrite a file/artifact; do not use for ordinary Q&A, search, explanation, summaries, dates, stocks, or event queries. Existing files must be read with read_file first. Returns a downloadable artifact for the written file. For generated HTML/PPT/report artifacts or content likely over 40 KB, use write_file_chunk instead so the model does not send the whole file in one tool call.",
         name: "write_file",
         parameters: {
           additionalProperties: false,
@@ -659,7 +659,7 @@ export function createFileTools(): AgentTool[] {
     definition: {
       function: {
         description:
-          "Perform an exact string replacement in a text file in the current session workspace. The file must be fully read with read_file first. Returns a downloadable artifact for the edited file.",
+          "Perform an exact string replacement in a text file in the current session workspace. Use only when the user explicitly asks to edit or update an existing file/artifact; do not use for ordinary Q&A, search, explanation, summaries, dates, stocks, or event queries. The file must be fully read with read_file first. Returns a downloadable artifact for the edited file.",
         name: "edit_file",
         parameters: {
           additionalProperties: false,
