@@ -46,7 +46,7 @@ export type PromptAssemblerInput = {
   userId?: string;
 };
 
-const PROMPT_VERSION = "2026-06-20.task-delegation-guidance-v1";
+const PROMPT_VERSION = "2026-06-20.web-search-trigger-guidance-v1";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 const TOOL_USE_ENFORCEMENT_MODELS = [
   "gpt",
@@ -231,6 +231,17 @@ function buildAskUserQuestionGuidanceSection(tools: string[]): PromptSection | n
   };
 }
 
+function buildWebSearchTriggerGuidanceSection(tools: string[]): PromptSection | null {
+  if (!tools.includes("web_search")) {
+    return null;
+  }
+
+  return {
+    ...readPromptFragment("web-search-trigger-guidance.md"),
+    tag: "web_search_trigger_guidance",
+  };
+}
+
 function buildSkillsSection(input: RequiredPromptInput): PromptSection {
   const index = buildSkillIndex(input.cwd, { userId: input.userId });
   const status = index.entries.length > 0 ? "indexed" : "empty";
@@ -394,6 +405,7 @@ export class PromptAssembler {
       buildAskUserQuestionGuidanceSection(availableTools),
       { ...readPromptFragment("output-protocol-guidance.md"), tag: "output_protocol_guidance" },
       buildAvailableToolsSectionFromNames(availableTools),
+      buildWebSearchTriggerGuidanceSection(availableTools),
       ...hermesToolGuidanceSections.filter(
         (section) => section.tag !== "hermes_task_completion_guidance",
       ),

@@ -12,13 +12,15 @@ test("PromptAssembler includes the production output protocol contract", async (
     platform: "webui",
   });
 
-  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.task-delegation-guidance-v1");
+  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.web-search-trigger-guidance-v1");
   assert.match(assembly.prompt, /<output_protocol_guidance/);
   assert.match(assembly.prompt, /工具只能通过系统原生 tool call 通道调用/);
   assert.match(assembly.prompt, /禁止把工具调用写成 XML、HTML、Markdown、JSON、函数调用文本、DSML/);
   assert.match(assembly.prompt, /不要把“某站点被 block\/blocked”“工具受限”“我换个方向搜索”等检索过程写进最终正文/);
   assert.match(assembly.prompt, /如果 `SKILL\.md` 明确要求调用某个工具/);
   assert.match(assembly.prompt, /不要用普通正文回答、承诺、追问、列计划或复述工具名来替代/);
+  assert.match(assembly.prompt, /<web_search_trigger_guidance/);
+  assert.match(assembly.prompt, /必须先调用 `web_search` 或其他更合适的实时\/结构化工具/);
 });
 
 test("PromptAssembler injects Hermes OpenAI execution guidance for GPT-family models", async () => {
@@ -50,6 +52,8 @@ test("PromptAssembler follows Hermes DeepSeek gate exactly", async () => {
 
   assert.match(assembly.prompt, /<hermes_task_completion_guidance/);
   assert.match(assembly.prompt, /<hermes_tool_use_enforcement_guidance/);
+  assert.match(assembly.prompt, /<web_search_trigger_guidance/);
+  assert.match(assembly.prompt, /如果用户要求“最新”“当前”“今天”“最近”“截至现在”/);
   assert.doesNotMatch(assembly.prompt, /<hermes_openai_model_execution_guidance/);
   assert.doesNotMatch(
     assembly.prompt,
@@ -69,6 +73,7 @@ test("PromptAssembler omits Hermes tool guidance when no tools are available", a
   assert.doesNotMatch(assembly.prompt, /<hermes_task_completion_guidance/);
   assert.doesNotMatch(assembly.prompt, /<hermes_tool_use_enforcement_guidance/);
   assert.doesNotMatch(assembly.prompt, /<hermes_openai_model_execution_guidance/);
+  assert.doesNotMatch(assembly.prompt, /<web_search_trigger_guidance/);
 });
 
 test("PromptAssembler injects ask_user_question guidance only when the tool is available", async () => {
