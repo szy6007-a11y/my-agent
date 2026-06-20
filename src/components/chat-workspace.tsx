@@ -970,6 +970,7 @@ export function ChatWorkspace({
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
   const isStreamingRef = useRef(false);
+  const composerStackRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const initialSessionLoadedRef = useRef<string | null>(null);
   const lastScrollTopRef = useRef(0);
@@ -1025,6 +1026,41 @@ export function ChatWorkspace({
       COMPOSER_TEXTAREA_MAX_HEIGHT,
     )}px`;
   }, [input]);
+
+  useEffect(() => {
+    const element = composerStackRef.current;
+    const workspace = element?.parentElement;
+    if (!element || !workspace) {
+      return;
+    }
+
+    const updateComposerHeight = () => {
+      workspace.style.setProperty(
+        "--composer-stack-height",
+        `${Math.ceil(element.getBoundingClientRect().height)}px`,
+      );
+    };
+
+    updateComposerHeight();
+
+    const ResizeObserverCtor =
+      typeof globalThis.ResizeObserver === "function" ? globalThis.ResizeObserver : null;
+
+    if (!ResizeObserverCtor) {
+      window.addEventListener("resize", updateComposerHeight);
+      return () => {
+        window.removeEventListener("resize", updateComposerHeight);
+        workspace.style.removeProperty("--composer-stack-height");
+      };
+    }
+
+    const observer = new ResizeObserverCtor(updateComposerHeight);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      workspace.style.removeProperty("--composer-stack-height");
+    };
+  }, []);
 
   const sessionLabel = useMemo(
     () => (sessionId ? `当前会话 ${shortSessionId(sessionId)}` : "尚未创建会话"),
@@ -2649,7 +2685,7 @@ export function ChatWorkspace({
           </button>
         )}
 
-        <div className="composer-stack">
+        <div className="composer-stack" ref={composerStackRef}>
           {(activeRun || pendingApprovals.length > 0 || agentTasks.length > 0) && (
             <section className="run-panel" aria-label="运行状态">
               {activeRun && (

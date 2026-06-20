@@ -646,6 +646,9 @@ body > button[aria-label="Open Next.js Dev Tools"],
   display: grid;
   min-height: 0;
   min-width: 0;
+  --composer-stack-bottom: 24px;
+  --composer-stack-height: 96px;
+  --scroll-bottom-gap: 12px;
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
@@ -747,7 +750,8 @@ body > button[aria-label="Open Next.js Dev Tools"],
   gap: 38px;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 44px max(24px, calc((100% - 760px) / 2)) 128px;
+  padding: 44px max(24px, calc((100% - 760px) / 2))
+    calc(var(--composer-stack-bottom) + var(--composer-stack-height) + 38px);
 }
 
 .messages-bottom-sentinel {
@@ -1191,7 +1195,9 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
 .scroll-bottom-button {
   position: absolute;
-  bottom: 92px;
+  bottom: calc(
+    var(--composer-stack-bottom) + var(--composer-stack-height) + var(--scroll-bottom-gap)
+  );
   left: 50%;
   z-index: 20;
   display: inline-grid;
@@ -1217,7 +1223,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
 .composer-stack {
   position: sticky;
-  bottom: 24px;
+  bottom: var(--composer-stack-bottom);
   z-index: 30;
   display: grid;
   width: min(710px, calc(100% - 32px));
@@ -2048,8 +2054,14 @@ body > button[aria-label="Open Next.js Dev Tools"],
     display: none;
   }
 
+  .workspace {
+    --composer-stack-bottom: 14px;
+    --scroll-bottom-gap: 10px;
+  }
+
   .messages {
-    padding: 28px 18px 112px;
+    padding: 28px 18px
+      calc(var(--composer-stack-bottom) + var(--composer-stack-height) + 28px);
   }
 
   .message-body {
@@ -2062,12 +2074,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   }
 
   .composer-stack {
-    bottom: 14px;
     width: calc(100% - 20px);
-  }
-
-  .scroll-bottom-button {
-    bottom: 78px;
   }
 
   .mode-button {
