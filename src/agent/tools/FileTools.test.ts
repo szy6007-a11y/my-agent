@@ -114,7 +114,10 @@ class PptChunkModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "已生成电子杂志风 HTML PPT，可直接下载 index.html。" };
+    yield {
+      type: "text_delta" as const,
+      text: "<final_answer>已生成电子杂志风 HTML PPT，可直接下载 index.html。</final_answer>",
+    };
   }
 }
 

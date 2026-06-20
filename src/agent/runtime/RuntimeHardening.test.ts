@@ -175,7 +175,24 @@ class FinalTextModelRouter {
 
   async *stream(input: ModelStreamInput) {
     this.payloads.push(input.context.messages);
-    yield { type: "text_delta" as const, text: "ok" };
+    yield { type: "text_delta" as const, text: "<final_answer>ok</final_answer>" };
+  }
+}
+
+class MissingFinalAnswerThenFinalModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield { type: "text_delta" as const, text: "现在信息已经比较充分了，整理如下：" };
+      return;
+    }
+
+    yield {
+      type: "text_delta" as const,
+      text: "<final_answer>这是恢复后的最终回答。</final_answer>",
+    };
   }
 }
 
@@ -190,7 +207,7 @@ class VisibleToolThenFinalModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "已恢复。" };
+    yield { type: "text_delta" as const, text: "<final_answer>已恢复。</final_answer>" };
   }
 }
 
@@ -213,7 +230,7 @@ class VisibleDsmlToolThenFinalModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "已恢复 DSML。" };
+    yield { type: "text_delta" as const, text: "<final_answer>已恢复 DSML。</final_answer>" };
   }
 }
 
@@ -236,7 +253,7 @@ class FakeWriteToolCallModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "写入完成。" };
+    yield { type: "text_delta" as const, text: "<final_answer>写入完成。</final_answer>" };
   }
 }
 
@@ -276,7 +293,10 @@ class FakeQuestionToolCallModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "已按用户回答继续。" };
+    yield {
+      type: "text_delta" as const,
+      text: "<final_answer>已按用户回答继续。</final_answer>",
+    };
   }
 }
 
@@ -302,7 +322,7 @@ class VisibleToolTextThenNativeToolCallModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "写入完成。" };
+    yield { type: "text_delta" as const, text: "<final_answer>写入完成。</final_answer>" };
   }
 }
 
@@ -325,7 +345,7 @@ class FakeArtifactToolCallModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "HTML 文件已生成。" };
+    yield { type: "text_delta" as const, text: "<final_answer>HTML 文件已生成。</final_answer>" };
   }
 }
 
@@ -367,7 +387,7 @@ class ChunkedWriteModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "分段写入完成。" };
+    yield { type: "text_delta" as const, text: "<final_answer>分段写入完成。</final_answer>" };
   }
 }
 
@@ -398,7 +418,7 @@ class LongChunkedWriteModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "长分段写入完成。" };
+    yield { type: "text_delta" as const, text: "<final_answer>长分段写入完成。</final_answer>" };
   }
 }
 
@@ -633,6 +653,63 @@ test("AgentLoop recovers once when the model writes a visible tool call", async 
   );
   assert.equal(JSON.stringify(modelRouter.payloads[1]).includes("[protocol-correction:visible_tool_call]"), true);
   assert.equal(sessions.messages.at(-1)?.content, "已恢复。");
+});
+
+test("AgentLoop recovers once when the model omits final_answer tags", async () => {
+  const [{ ContextEngine }, { AgentLoop }] = await Promise.all([
+    import("@/agent/context/ContextEngine"),
+    import("@/agent/runtime/AgentLoop"),
+  ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "整理这件事的结论",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  const modelRouter = new MissingFinalAnswerThenFinalModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      runId: "run_missing_final",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+  const recoveryIndex = events.findIndex(
+    (event) => event.type === "protocol.recovery" && event.reason === "missing_final_answer",
+  );
+  const answerStartIndex = events.findIndex((event) => event.type === "assistant.answer.started");
+  const deltaText = events
+    .filter((event): event is Extract<AgentEvent, { type: "assistant.delta" }> =>
+      event.type === "assistant.delta",
+    )
+    .map((event) => event.text)
+    .join("");
+
+  assert.equal(modelRouter.payloads.length, 2);
+  assert.ok(recoveryIndex >= 0);
+  assert.ok(answerStartIndex > recoveryIndex);
+  assert.equal(deltaText, "这是恢复后的最终回答。");
+  assert.equal(deltaText.includes("现在信息已经比较充分了"), false);
+  assert.equal(
+    JSON.stringify(modelRouter.payloads[1]).includes("[protocol-correction:missing_final_answer]"),
+    true,
+  );
+  assert.equal(events.some((event) => event.type === "assistant.delta.retracted"), false);
+  assert.equal(sessions.messages.at(-1)?.content, "这是恢复后的最终回答。");
 });
 
 test("AgentLoop recovers when the model writes a visible DeepSeek DSML tool call", async () => {

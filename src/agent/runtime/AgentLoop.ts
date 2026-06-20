@@ -17,6 +17,7 @@ import {
   applyRuntimeReminder,
   previewToolArguments,
   previewToolResult,
+  stripTrustedSystemReminder,
 } from "@/agent/runtime/SystemReminder";
 import {
   VisibleToolCallDetector,
@@ -58,7 +59,9 @@ const TOOL_ROUND_LIMIT_FINALIZER_PROMPT =
   "工具调用轮次已经达到上限。请停止调用工具，基于上面已经返回的工具结果给出当前可支持的最终回答；如果证据不足，请说明限制和已经查到的信息。";
 const TOOL_ROUND_LIMIT_FALLBACK = "工具调用轮次达到上限，已停止继续调用工具。";
 const EMPTY_ASSISTANT_FALLBACK = "我没有生成有效回复，请再试一次。";
+const MISSING_FINAL_ANSWER_FALLBACK = "模型没有生成有效最终回复，请再试一次。";
 const VISIBLE_TOOL_CALL_CORRECTION_MARKER = "[protocol-correction:visible_tool_call]";
+const MISSING_FINAL_ANSWER_CORRECTION_MARKER = "[protocol-correction:missing_final_answer]";
 
 export interface AgentLoopOptions {
   backgroundReview?: boolean;
@@ -151,16 +154,37 @@ function latestUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
   return undefined;
 }
 
-function buildProtocolCorrection(toolName: string): string {
-  return `上一轮模型在正文中手写了工具调用 ${toolName}，这不是有效协议。请重新处理当前请求：如果确实需要 ${toolName}，必须使用原生 tool call；如果不需要工具，请直接给出中文正文。不要在正文里输出工具 JSON、XML、函数调用文本或内部协议。`;
+function latestUserQuestion(messages: AgentMessage[], targetMessageId?: string): string {
+  const target =
+    targetMessageId ?
+      messages.find((message) => message.id === targetMessageId && message.role === "user")
+    : latestUserMessage(messages);
+  const content = target?.content ? stripTrustedSystemReminder(target.content).trim() : "";
+  return content || "（未能提取到用户原问题，请基于当前上下文完成上一轮未完成任务。）";
 }
 
-function appendProtocolCorrection(content: string, correction: string): string {
-  if (content.includes(VISIBLE_TOOL_CALL_CORRECTION_MARKER)) {
+function buildVisibleToolCallCorrection(toolName: string): string {
+  return `上一轮模型在正文中手写了工具调用 ${toolName}，这不是有效协议。请重新处理当前请求：如果确实需要 ${toolName}，必须使用原生 tool call；如果不需要工具，必须在 <final_answer>...</final_answer> 内给出中文正文。不要在正文里输出工具 JSON、XML、函数调用文本或内部协议。`;
+}
+
+function buildMissingFinalAnswerCorrection(originalQuestion: string): string {
+  return `上一轮模型没有输出文本字面量 <final_answer>...</final_answer>，因此上一轮草稿不会展示给用户。
+请重新完成用户本轮真实问题，不要重新询问用户，不要丢弃已经完成的判断。
+必须确保最终用户可见回答完整放在 <final_answer>...</final_answer> 内：
+${originalQuestion}
+如果仍需要使用工具，请先通过原生 tool call 调用对应工具；工具完成后再输出 <final_answer>...</final_answer> 和给用户看的完整中文答复。禁止在最终回答里手写工具 XML/JSON/函数调用文本。`;
+}
+
+function appendProtocolCorrection(
+  content: string,
+  marker: string,
+  correction: string,
+): string {
+  if (content.includes(marker)) {
     return content;
   }
 
-  const addition = `${VISIBLE_TOOL_CALL_CORRECTION_MARKER}\n${correction}`;
+  const addition = `${marker}\n${correction}`;
   if (content.includes(SYSTEM_REMINDER_CLOSE_TAG)) {
     return content.replace(SYSTEM_REMINDER_CLOSE_TAG, `\n\n${addition}\n${SYSTEM_REMINDER_CLOSE_TAG}`);
   }
@@ -170,12 +194,13 @@ function appendProtocolCorrection(content: string, correction: string): string {
 
 function appendCorrectionToLatestModelUserMessage(
   messages: ModelMessage[],
+  marker: string,
   correction: string,
 ): boolean {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role === "user" && typeof message.content === "string") {
-      message.content = appendProtocolCorrection(message.content, correction);
+      message.content = appendProtocolCorrection(message.content, marker, correction);
       return true;
     }
   }
@@ -496,7 +521,8 @@ export class AgentLoop {
     let workingMessages: ModelMessage[] = [...context.messages];
     let visibleAssistantText = "";
     let assistantAnswerStarted = false;
-    let protocolRecoveryAttempts = 0;
+    let missingFinalAnswerRecoveryAttempts = 0;
+    let visibleToolCallRecoveryAttempts = 0;
     const maybeStartAnswer = (): AgentEvent | null => {
       if (assistantAnswerStarted) {
         return null;
@@ -658,9 +684,9 @@ export class AgentLoop {
         if (toolCalls.length === 0) {
           if (
             visibleToolCallViolation &&
-            protocolRecoveryAttempts < MAX_PROTOCOL_RECOVERY_ATTEMPTS
+            visibleToolCallRecoveryAttempts < MAX_PROTOCOL_RECOVERY_ATTEMPTS
           ) {
-            protocolRecoveryAttempts += 1;
+            visibleToolCallRecoveryAttempts += 1;
             if (!passTextMovedToReasoning && visiblePassText) {
               visibleAssistantText = removeVisibleText(visibleAssistantText, visiblePassText);
               yield {
@@ -669,13 +695,14 @@ export class AgentLoop {
                 text: visiblePassText,
               };
             }
-            const correction = buildProtocolCorrection(visibleToolCallViolation.toolName);
+            const correction = buildVisibleToolCallCorrection(visibleToolCallViolation.toolName);
             const correctionTarget =
               history.find((message) => message.id === input.userMessageId) ??
               latestUserMessage(history);
             if (correctionTarget) {
               const correctedContent = appendProtocolCorrection(
                 correctionTarget.content,
+                VISIBLE_TOOL_CALL_CORRECTION_MARKER,
                 correction,
               );
               if (correctedContent !== correctionTarget.content) {
@@ -688,16 +715,20 @@ export class AgentLoop {
                 });
               }
             }
-            if (!appendCorrectionToLatestModelUserMessage(workingMessages, correction)) {
+            if (!appendCorrectionToLatestModelUserMessage(
+              workingMessages,
+              VISIBLE_TOOL_CALL_CORRECTION_MARKER,
+              correction,
+            )) {
               workingMessages.push({
                 role: "user",
-                content: correction,
+                content: `${VISIBLE_TOOL_CALL_CORRECTION_MARKER}\n${correction}`,
               });
             }
             yield {
               type: "protocol.recovery",
               reason: "visible_tool_call",
-              retryAttempt: protocolRecoveryAttempts,
+              retryAttempt: visibleToolCallRecoveryAttempts,
               runId: input.runId,
               toolName: visibleToolCallViolation.toolName,
             };
@@ -719,6 +750,7 @@ export class AgentLoop {
           }
 
           if (!visibleToolCallViolation) {
+            const answerStartedBeforeFinish = finalAnswerStream.hasStartedAnswer;
             const finalAnswerFinish = finalAnswerStream.finish();
             if (finalAnswerFinish.hiddenText.trim()) {
               yield {
@@ -728,18 +760,45 @@ export class AgentLoop {
               };
             }
 
-            const finalAnswerText =
-              finalAnswerFinish.answerText || finalAnswerFinish.fallbackAnswerText;
-            if (finalAnswerText.trim()) {
+            if (
+              !answerStartedBeforeFinish &&
+              finalAnswerFinish.missingFinalAnswerText.trim() &&
+              missingFinalAnswerRecoveryAttempts < MAX_PROTOCOL_RECOVERY_ATTEMPTS
+            ) {
+              missingFinalAnswerRecoveryAttempts += 1;
+              const correction = buildMissingFinalAnswerCorrection(
+                latestUserQuestion(history, input.userMessageId),
+              );
+              const unfinishedOutput = finalAnswerFinish.missingFinalAnswerText.trim();
+              if (unfinishedOutput) {
+                workingMessages.push({
+                  role: "assistant",
+                  content: unfinishedOutput,
+                });
+              }
+              workingMessages.push({
+                role: "user",
+                content: `${MISSING_FINAL_ANSWER_CORRECTION_MARKER}\n${correction}`,
+              });
+              yield {
+                type: "protocol.recovery",
+                reason: "missing_final_answer",
+                retryAttempt: missingFinalAnswerRecoveryAttempts,
+                runId: input.runId,
+              };
+              continue;
+            }
+
+            if (finalAnswerFinish.answerText.trim()) {
               const startEvent = maybeStartAnswer();
               if (startEvent) {
                 yield startEvent;
               }
-              visibleAssistantText += finalAnswerText;
+              visibleAssistantText += finalAnswerFinish.answerText;
               yield {
                 type: "assistant.delta",
                 messageId: assistantMessageId,
-                text: finalAnswerText,
+                text: finalAnswerFinish.answerText,
               };
             }
           }
@@ -1116,6 +1175,7 @@ export class AgentLoop {
 
       await this.sessions.updateRunStatus(input.runId, "finalizing");
       const finalizerAnswerStream = new FinalAnswerStream();
+      let finalizerAnswerStarted = false;
       const sanitizedFinalizerPayload = sanitizeModelMessages(workingMessages);
       if (sanitizedFinalizerPayload.changed) {
         workingMessages = sanitizedFinalizerPayload.messages;
@@ -1155,6 +1215,7 @@ export class AgentLoop {
 
         if (event.type === "text_delta") {
           const finalAnswerChunk = finalizerAnswerStream.push(event.text);
+          finalizerAnswerStarted ||= finalAnswerChunk.answerStarted;
           if (finalAnswerChunk.hiddenText.trim()) {
             yield {
               type: "reasoning.delta",
@@ -1205,23 +1266,24 @@ export class AgentLoop {
           text: finalizerAnswerFinish.hiddenText,
         };
       }
-      const finalizerVisibleText =
-        finalizerAnswerFinish.answerText || finalizerAnswerFinish.fallbackAnswerText;
-      if (finalizerVisibleText.trim()) {
+      if (finalizerAnswerFinish.answerText.trim()) {
         const startEvent = maybeStartAnswer();
         if (startEvent) {
           yield startEvent;
         }
-        visibleAssistantText += finalizerVisibleText;
+        visibleAssistantText += finalizerAnswerFinish.answerText;
         yield {
           type: "assistant.delta",
           messageId: assistantMessageId,
-          text: finalizerVisibleText,
+          text: finalizerAnswerFinish.answerText,
         };
       }
 
       if (!visibleAssistantText.trim()) {
-        const fallbackDelta = TOOL_ROUND_LIMIT_FALLBACK;
+        const fallbackDelta =
+          finalizerAnswerStarted || !finalizerAnswerFinish.missingFinalAnswerText.trim() ?
+            TOOL_ROUND_LIMIT_FALLBACK
+          : MISSING_FINAL_ANSWER_FALLBACK;
         const startEvent = maybeStartAnswer();
         if (startEvent) {
           yield startEvent;

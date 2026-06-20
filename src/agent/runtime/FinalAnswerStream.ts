@@ -10,8 +10,13 @@ export type FinalAnswerStreamChunk = {
 
 export type FinalAnswerStreamFinish = {
   answerText: string;
+  /**
+   * Deprecated compatibility field. Untagged content is no longer promoted to
+   * a final answer; callers should recover the output protocol instead.
+   */
   fallbackAnswerText: string;
   hiddenText: string;
+  missingFinalAnswerText: string;
 };
 
 function emptyChunk(): FinalAnswerStreamChunk {
@@ -99,12 +104,13 @@ export class FinalAnswerStream {
 
   finish(): FinalAnswerStreamFinish {
     if (this.phase === "before_answer") {
-      const fallbackAnswerText = stripFinalAnswerProtocolTags(this.beforeAnswerBuffer);
+      const missingFinalAnswerText = stripFinalAnswerProtocolTags(this.beforeAnswerBuffer);
       this.beforeAnswerBuffer = "";
       return {
         answerText: "",
-        fallbackAnswerText,
+        fallbackAnswerText: "",
         hiddenText: "",
+        missingFinalAnswerText,
       };
     }
 
@@ -115,6 +121,7 @@ export class FinalAnswerStream {
         answerText,
         fallbackAnswerText: "",
         hiddenText: "",
+        missingFinalAnswerText: "",
       };
     }
 
@@ -122,6 +129,7 @@ export class FinalAnswerStream {
       answerText: "",
       fallbackAnswerText: "",
       hiddenText: "",
+      missingFinalAnswerText: "",
     };
   }
 

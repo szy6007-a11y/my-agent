@@ -49,7 +49,7 @@ class FakeModelRouter {
 
   async *stream(input: ModelStreamInput) {
     this.systemPrompts.push(input.context.messages[0]?.content ?? "");
-    yield { type: "text_delta" as const, text: "ok" };
+    yield { type: "text_delta" as const, text: "<final_answer>ok</final_answer>" };
   }
 }
 
@@ -76,7 +76,10 @@ class ToolLoopThenFinalModelRouter {
       return;
     }
 
-    yield { type: "text_delta" as const, text: "基于已返回的搜索结果，这是最终回答。" };
+    yield {
+      type: "text_delta" as const,
+      text: "<final_answer>基于已返回的搜索结果，这是最终回答。</final_answer>",
+    };
   }
 }
 

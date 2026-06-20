@@ -41,6 +41,7 @@ test("FinalAnswerStream handles split answer tags without leaking them", () => {
     answerText: "",
     fallbackAnswerText: "",
     hiddenText: "",
+    missingFinalAnswerText: "",
   });
 });
 
@@ -59,6 +60,7 @@ test("FinalAnswerStream keeps natural text after an early close tag", () => {
     answerText: "",
     fallbackAnswerText: "",
     hiddenText: "",
+    missingFinalAnswerText: "",
   });
 });
 
@@ -70,18 +72,20 @@ test("FinalAnswerStream does not leak an unfinished close tag at finish", () => 
     answerText: "",
     fallbackAnswerText: "",
     hiddenText: "",
+    missingFinalAnswerText: "",
   });
 });
 
-test("FinalAnswerStream returns untagged text as fallback answer", () => {
+test("FinalAnswerStream reports untagged text as missing final_answer content", () => {
   const stream = new FinalAnswerStream();
 
   stream.push("plain answer");
 
   assert.deepEqual(stream.finish(), {
     answerText: "",
-    fallbackAnswerText: "plain answer",
+    fallbackAnswerText: "",
     hiddenText: "",
+    missingFinalAnswerText: "plain answer",
   });
 });
 

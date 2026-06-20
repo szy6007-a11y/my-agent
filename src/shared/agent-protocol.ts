@@ -179,7 +179,11 @@ export type AgentEvent =
     }
   | {
       type: "protocol.recovery";
-      reason: "visible_tool_call" | "duplicate_answer_prefix" | "context_too_long";
+      reason:
+        | "visible_tool_call"
+        | "missing_final_answer"
+        | "duplicate_answer_prefix"
+        | "context_too_long";
       retryAttempt: number;
       runId: string;
       toolName?: string;

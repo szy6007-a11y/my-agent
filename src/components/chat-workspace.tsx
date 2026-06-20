@@ -1877,6 +1877,8 @@ export function ChatWorkspace({
               message:
                 event.toolName ?
                   `模型协议恢复重试：${event.toolName}`
+                : event.reason === "missing_final_answer" ?
+                  "模型协议恢复重试：补全最终回答边界"
                 : "模型协议恢复重试",
             });
           }
