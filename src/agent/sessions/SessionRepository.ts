@@ -1792,6 +1792,7 @@ export class SessionRepository {
   }
 
   async listAgentTasks(input: {
+    includeAncestors?: boolean;
     limit?: number;
     sessionId: string;
     userId: string;
@@ -1800,6 +1801,20 @@ export class SessionRepository {
     const db = getSql();
     const limit = Math.max(1, Math.min(input.limit ?? 25, 100));
     const rows = await db<StoredAgentTaskRow[]>`
+      with recursive visible_sessions as (
+        select id, parent_session_id
+        from sessions
+        where id = ${input.sessionId}
+          and user_id = ${input.userId}
+          and environment = ${serverEnv.APP_ENV}
+        union all
+        select parent.id, parent.parent_session_id
+        from sessions parent
+        join visible_sessions child on child.parent_session_id = parent.id
+        where ${input.includeAncestors === true}
+          and parent.user_id = ${input.userId}
+          and parent.environment = ${serverEnv.APP_ENV}
+      )
       select
         id,
         user_id,
@@ -1826,7 +1841,7 @@ export class SessionRepository {
         completed_at,
         updated_at
       from agent_tasks
-      where parent_session_id = ${input.sessionId}
+      where parent_session_id in (select id from visible_sessions)
         and user_id = ${input.userId}
         and environment = ${serverEnv.APP_ENV}
       order by updated_at desc, created_at desc

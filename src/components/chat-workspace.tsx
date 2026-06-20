@@ -43,8 +43,17 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   artifacts?: AgentArtifact[];
+  createdAt?: string;
   reasoningContent?: string;
   status?: "streaming" | "complete" | "failed" | "aborted";
+};
+
+type ChatMessagePayload = {
+  artifacts?: AgentArtifact[];
+  content: string;
+  createdAt?: string;
+  id: string;
+  role: "user" | "assistant";
 };
 
 type AuthUser = {
@@ -211,6 +220,39 @@ function taskStatusLabel(status: AgentTaskSummary["status"]) {
   return "已中断";
 }
 
+function taskIsActive(task: Pick<AgentTaskSummary, "status">) {
+  return task.status === "pending" || task.status === "queued" || task.status === "running";
+}
+
+function taskNeedsAttention(task: Pick<AgentTaskSummary, "status">) {
+  return task.status === "failed" || task.status === "cancelled" || task.status === "interrupted";
+}
+
+function formatSyncedAt(value: string | null) {
+  if (!value) {
+    return "等待同步";
+  }
+  return `同步 ${formatConsoleTime(value)}`;
+}
+
+function formatTaskDuration(task: AgentTaskSummary) {
+  if (!task.startedAt) {
+    return null;
+  }
+  const started = new Date(task.startedAt).getTime();
+  const ended = task.completedAt ? new Date(task.completedAt).getTime() : Date.now();
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
+    return null;
+  }
+  const seconds = Math.max(1, Math.round((ended - started) / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
 function logLevelLabel(level: ServiceConsoleLog["level"]) {
   if (level === "error") return "错误";
   if (level === "warn") return "警告";
@@ -351,6 +393,40 @@ function updateMessage(
   );
 }
 
+function toChatMessage(message: ChatMessagePayload): ChatMessage {
+  return {
+    artifacts: message.artifacts,
+    content:
+      message.role === "user" ?
+        stripTrustedRuntimeReminder(message.content)
+      : message.content,
+    createdAt: message.createdAt,
+    id: message.id,
+    role: message.role,
+    status: "complete",
+  };
+}
+
+function toChatMessages(messages: ChatMessagePayload[]): ChatMessage[] {
+  return messages.map(toChatMessage);
+}
+
+function messagesChanged(current: ChatMessage[], next: ChatMessage[]) {
+  if (current.length !== next.length) {
+    return true;
+  }
+
+  return current.some((message, index) => {
+    const candidate = next[index];
+    return (
+      !candidate ||
+      candidate.id !== message.id ||
+      candidate.content !== message.content ||
+      (candidate.artifacts?.length ?? 0) !== (message.artifacts?.length ?? 0)
+    );
+  });
+}
+
 function taskEventUpdate(event: AgentEvent): { activity?: string; task: AgentTaskSummary } | null {
   if (
     event.type === "task.created" ||
@@ -379,12 +455,11 @@ function taskEventUpdate(event: AgentEvent): { activity?: string; task: AgentTas
 }
 
 function taskSortRank(task: TaskCardState) {
-  if (task.status === "running") return 0;
-  if (task.status === "queued" || task.status === "pending") return 1;
-  if (task.status === "failed" || task.status === "cancelled" || task.status === "interrupted") {
-    return 2;
-  }
-  return 3;
+  if (task.kind === "subagent" && taskIsActive(task)) return 0;
+  if (task.status === "running") return 1;
+  if (taskNeedsAttention(task)) return 2;
+  if (task.status === "queued" || task.status === "pending") return 3;
+  return 4;
 }
 
 function upsertTaskCard(
@@ -407,9 +482,19 @@ function upsertTaskCard(
     )
   : [nextTask, ...tasks];
 
-  return merged
-    .sort((left, right) => taskSortRank(left) - taskSortRank(right))
-    .slice(0, 8);
+  return sortTaskCards(merged);
+}
+
+function sortTaskCards(tasks: TaskCardState[]) {
+  return [...tasks]
+    .sort((left, right) => {
+      const rank = taskSortRank(left) - taskSortRank(right);
+      if (rank !== 0) {
+        return rank;
+      }
+      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+    })
+    .slice(0, 12);
 }
 
 function ArtifactList({ artifacts }: { artifacts?: AgentArtifact[] }) {
@@ -461,37 +546,73 @@ function TaskStatusIcon({ status }: { status: AgentTaskSummary["status"] }) {
   return <CircleStop size={15} />;
 }
 
-function TaskPanel({ tasks }: { tasks: TaskCardState[] }) {
+function TaskPanel({ syncedAt, tasks }: { syncedAt: string | null; tasks: TaskCardState[] }) {
   if (tasks.length === 0) {
     return null;
   }
 
+  const subagents = tasks.filter((task) => task.kind === "subagent");
+  const tracked = subagents.length > 0 ? subagents : tasks;
+  const activeCount = tracked.filter(taskIsActive).length;
+  const completedCount = tracked.filter((task) => task.status === "completed").length;
+  const attentionCount = tracked.filter(taskNeedsAttention).length;
+  const progress =
+    tracked.length > 0 ? Math.round((completedCount / tracked.length) * 100) : 0;
+  const headline =
+    subagents.length > 0 ?
+      `后台子代理 ${completedCount}/${tracked.length} 完成`
+    : `任务 ${completedCount}/${tracked.length} 完成`;
+  const summary =
+    activeCount > 0 ? `${activeCount} 个仍在后台运行`
+    : attentionCount > 0 ? `${attentionCount} 个需要关注`
+    : "所有后台工作已收束";
+  const panelState =
+    activeCount > 0 ? "active"
+    : attentionCount > 0 ? "attention"
+    : "complete";
+
   return (
-    <div className="task-panel" aria-label="任务状态">
+    <div className={`task-panel ${panelState}`} aria-label="任务状态">
+      <div className="task-panel-header">
+        <span className="task-panel-pulse" aria-hidden="true" />
+        <span className="task-panel-title">
+          <strong>{headline}</strong>
+          <span>{summary}</span>
+        </span>
+        <span className="task-panel-sync">{formatSyncedAt(syncedAt)}</span>
+      </div>
+      <div className="task-progress" aria-hidden="true">
+        <span style={{ width: `${progress}%` }} />
+      </div>
       {tasks.map((task) => {
         const detail =
-          task.lastActivity ||
-          task.activeForm ||
-          task.resultPreview ||
-          task.error ||
-          task.description ||
-          task.goal ||
-          "";
+          task.status === "completed" ?
+            task.resultPreview || "已完成，结果已写回当前会话"
+          : taskNeedsAttention(task) ?
+            task.error || "任务没有正常完成"
+          : task.lastActivity ||
+            task.activeForm ||
+            (task.kind === "subagent" ? "正在后台运行，当前对话可继续" : "") ||
+            task.description ||
+            task.goal ||
+            "";
+        const duration = formatTaskDuration(task);
         return (
-          <div className={`task-card ${task.status}`} key={task.id}>
+          <div className={`task-card ${task.kind} ${task.status}`} key={task.id}>
             <span className="task-card-icon" aria-hidden="true">
               <TaskStatusIcon status={task.status} />
             </span>
             <span className="task-card-copy">
               <span className="task-card-head">
                 <strong>{task.subject}</strong>
-                <span>{task.kind === "subagent" ? "子代理" : "任务"}</span>
+                <span>{task.kind === "subagent" ? "后台子代理" : "主线任务"}</span>
               </span>
               {detail && <small>{detail}</small>}
               <span className="task-card-meta">
                 <span>{taskStatusLabel(task.status)}</span>
                 <span>{shortTaskId(task.id)}</span>
                 {task.childRunId && <span>run {shortRunId(task.childRunId)}</span>}
+                {duration && <span>{duration}</span>}
               </span>
             </span>
           </div>
@@ -821,12 +942,15 @@ export function ChatWorkspace() {
   const [activeRun, setActiveRun] = useState<ActiveRunState | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentTasks, setAgentTasks] = useState<TaskCardState[]>([]);
+  const [taskSyncedAt, setTaskSyncedAt] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const taskRefreshInFlightRef = useRef(false);
+  const taskCompletionSignatureRef = useRef("");
   const touchStartYRef = useRef<number | null>(null);
   const userDetachedFromBottomRef = useRef(false);
   const sessionLabel = useMemo(
@@ -839,6 +963,10 @@ export function ChatWorkspace() {
   const overallStatusLabel = serviceSnapshot ?
     healthStatusLabel(serviceSnapshot.status)
   : "建立监听";
+  const hasActiveSubagentTasks = useMemo(
+    () => agentTasks.some((task) => task.kind === "subagent" && taskIsActive(task)),
+    [agentTasks],
+  );
 
   const appendConsoleLog = useCallback(
     (log: Omit<ServiceConsoleLog, "id"> & { id?: string }) => {
@@ -946,11 +1074,13 @@ export function ChatWorkspace() {
     setActiveRun(null);
     setPendingApprovals([]);
     setAgentTasks([]);
+    setTaskSyncedAt(null);
     setMonitorConnection("connecting");
     setServiceSnapshot(null);
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
     lastScrollTopRef.current = 0;
+    taskCompletionSignatureRef.current = "";
     userDetachedFromBottomRef.current = false;
     setShowScrollToBottom(false);
   }, []);
@@ -981,6 +1111,132 @@ export function ChatWorkspace() {
     setAppEnvironment(body.environment);
     setSessions(body.sessions);
   }, [handleUnauthorized]);
+
+  const refreshCurrentSessionMessages = useCallback(async () => {
+    if (!sessionId || isStreaming) {
+      return;
+    }
+
+    const response = await fetch(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+    );
+
+    if (response.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(String(response.status));
+    }
+
+    const body = (await response.json()) as {
+      messages: ChatMessagePayload[];
+      session: { id: string };
+    };
+    const nextMessages = toChatMessages(body.messages);
+    const shouldScroll = isAtBottomRef.current && !userDetachedFromBottomRef.current;
+
+    setSessionId(body.session.id);
+    setMessages((current) =>
+      messagesChanged(current, nextMessages) ? nextMessages : current,
+    );
+
+    if (shouldScroll) {
+      requestAnimationFrame(() => scrollToBottom("smooth"));
+    }
+  }, [handleUnauthorized, isStreaming, scrollToBottom, sessionId]);
+
+  const refreshSessionTasks = useCallback(
+    async (input: { refreshMessagesOnCompletion?: boolean } = {}) => {
+      if (!sessionId || taskRefreshInFlightRef.current) {
+        return;
+      }
+
+      taskRefreshInFlightRef.current = true;
+      try {
+        const response = await fetch(
+          `/api/agent/sessions/${encodeURIComponent(sessionId)}/tasks`,
+        );
+
+        if (response.status === 401) {
+          handleUnauthorized();
+          return;
+        }
+
+        if (response.status === 404) {
+          setAgentTasks([]);
+          setTaskSyncedAt(new Date().toISOString());
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+
+        const body = (await response.json()) as {
+          session: { id: string };
+          tasks: AgentTaskSummary[];
+        };
+        const tasks = sortTaskCards(body.tasks);
+        const completedSignature = tasks
+          .filter(
+            (task) =>
+              task.kind === "subagent" &&
+              !taskIsActive(task) &&
+              (task.resultPreview || task.error || task.completedAt),
+          )
+          .map((task) => `${task.id}:${task.status}:${task.updatedAt}`)
+          .join("|");
+
+        setSessionId(body.session.id);
+        setAgentTasks(tasks);
+        setTaskSyncedAt(new Date().toISOString());
+
+        if (
+          input.refreshMessagesOnCompletion &&
+          completedSignature &&
+          completedSignature !== taskCompletionSignatureRef.current
+        ) {
+          taskCompletionSignatureRef.current = completedSignature;
+          await refreshCurrentSessionMessages();
+        }
+      } catch (error) {
+        appendConsoleLog({
+          at: new Date().toISOString(),
+          level: "warn",
+          source: "task",
+          message:
+            error instanceof Error ? `任务状态同步失败：${error.message}` : "任务状态同步失败",
+        });
+      } finally {
+        taskRefreshInFlightRef.current = false;
+      }
+    },
+    [appendConsoleLog, handleUnauthorized, refreshCurrentSessionMessages, sessionId],
+  );
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+
+    void refreshSessionTasks({ refreshMessagesOnCompletion: true });
+  }, [refreshSessionTasks, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || (!activeRun && !isStreaming && !hasActiveSubagentTasks)) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshSessionTasks({ refreshMessagesOnCompletion: true });
+    }, 2000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [activeRun, hasActiveSubagentTasks, isStreaming, refreshSessionTasks, sessionId]);
 
   useEffect(() => {
     const element = messagesRef.current;
@@ -1223,10 +1479,12 @@ export function ChatWorkspace() {
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
     lastScrollTopRef.current = 0;
+    taskCompletionSignatureRef.current = "";
     userDetachedFromBottomRef.current = false;
     setMessages([]);
     setSessionId(null);
     setAgentTasks([]);
+    setTaskSyncedAt(null);
     setShowScrollToBottom(false);
   }
 
@@ -1253,32 +1511,19 @@ export function ChatWorkspace() {
       }
 
       const body = (await response.json()) as {
-        messages: Array<{
-          artifacts?: AgentArtifact[];
-          content: string;
-          id: string;
-          role: "user" | "assistant";
-        }>;
+        messages: ChatMessagePayload[];
+        session?: { id: string };
       };
 
-      setSessionId(nextSessionId);
+      setSessionId(body.session?.id ?? nextSessionId);
       setAgentTasks([]);
+      setTaskSyncedAt(null);
+      taskCompletionSignatureRef.current = "";
       autoScrollRef.current = true;
       isAtBottomRef.current = true;
       lastScrollTopRef.current = 0;
       userDetachedFromBottomRef.current = false;
-      setMessages(
-        body.messages.map((message) => ({
-          content:
-            message.role === "user" ?
-              stripTrustedRuntimeReminder(message.content)
-            : message.content,
-          artifacts: message.artifacts,
-          id: message.id,
-          role: message.role,
-          status: "complete",
-        })),
-      );
+      setMessages(toChatMessages(body.messages));
     } catch (error) {
       appendConsoleLog({
         at: new Date().toISOString(),
@@ -1321,6 +1566,8 @@ export function ChatWorkspace() {
     setPendingApprovals([]);
     if (!sessionId) {
       setAgentTasks([]);
+      setTaskSyncedAt(null);
+      taskCompletionSignatureRef.current = "";
     }
     setIsStreaming(true);
 
@@ -1614,6 +1861,7 @@ export function ChatWorkspace() {
           const taskUpdate = taskEventUpdate(event);
           if (taskUpdate) {
             setAgentTasks((current) => upsertTaskCard(current, taskUpdate));
+            setTaskSyncedAt(new Date().toISOString());
             if (event.type === "task.created") {
               appendConsoleLog({
                 at: new Date().toISOString(),
@@ -1650,6 +1898,7 @@ export function ChatWorkspace() {
               current.filter((approval) => approval.runId !== event.runId),
             );
             void refreshSessions();
+            void refreshSessionTasks({ refreshMessagesOnCompletion: true });
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
@@ -2186,7 +2435,7 @@ export function ChatWorkspace() {
                   </span>
                 </div>
               )}
-              <TaskPanel tasks={agentTasks} />
+              <TaskPanel syncedAt={taskSyncedAt} tasks={agentTasks} />
               {pendingApprovals.map((approval) => {
                 const questionRequest = askUserQuestionRequestFromApproval(approval.request);
                 if (questionRequest) {

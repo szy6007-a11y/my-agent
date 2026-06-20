@@ -1163,58 +1163,154 @@ body > button[aria-label="Open Next.js Dev Tools"],
 
 .task-panel {
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  border-top: 1px solid #eeeeee;
+  padding-top: 8px;
+}
+
+.task-panel-header {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.task-panel-pulse {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  justify-self: center;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.task-panel.complete .task-panel-pulse {
+  background: #16a34a;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.12);
+}
+
+.task-panel.attention .task-panel-pulse {
+  background: #dc2626;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.12);
+}
+
+.task-panel-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.task-panel-title strong,
+.task-panel-title span,
+.task-panel-sync {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-panel-title strong {
+  color: #202020;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.task-panel-title span,
+.task-panel-sync {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.task-panel-sync {
+  border: 1px solid #e7e7e7;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 3px 7px;
+}
+
+.task-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eeeeee;
+}
+
+.task-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 180ms ease;
+}
+
+.task-panel.complete .task-progress span {
+  background: #16a34a;
+}
+
+.task-panel.attention .task-progress span {
+  background: #dc2626;
 }
 
 .task-card {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr);
   min-width: 0;
-  gap: 8px;
+  gap: 9px;
   align-items: start;
   border: 1px solid #e8e8e8;
   border-left-color: #8b8b8b;
-  border-left-width: 3px;
+  border-left-width: 4px;
   border-radius: 8px;
-  background: #fbfbfb;
-  padding: 8px 9px 8px 7px;
+  background: #ffffff;
+  padding: 9px 10px 9px 8px;
 }
 
 .task-card.running {
   border-left-color: #2563eb;
+  background: #f8fbff;
 }
 
 .task-card.completed {
   border-left-color: #16a34a;
+  background: #f8fdf9;
 }
 
 .task-card.failed,
 .task-card.cancelled,
 .task-card.interrupted {
   border-left-color: #dc2626;
+  background: #fffafa;
 }
 
 .task-card-icon {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   place-items: center;
   border-radius: 999px;
-  background: #ffffff;
+  border: 1px solid #e8e8e8;
+  background: #fafafa;
   color: #555555;
 }
 
 .task-card.running .task-card-icon {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: #ffffff;
   color: #2563eb;
 }
 
 .task-card.completed .task-card-icon {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: #ffffff;
   color: #15803d;
 }
 
 .task-card.failed .task-card-icon,
 .task-card.cancelled .task-card-icon,
 .task-card.interrupted .task-card-icon {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: #ffffff;
   color: #b91c1c;
 }
 
@@ -1262,6 +1358,7 @@ body > button[aria-label="Open Next.js Dev Tools"],
   color: #555555;
   font-size: 11px;
   line-height: 1.35;
+  white-space: normal;
 }
 
 .task-card-meta {

@@ -233,6 +233,7 @@ export function createTaskTools(): AgentTool[] {
     async execute(args, context) {
       const input = asRecord(args) as TaskListArgs;
       const tasks = await context.sessions.listAgentTasks({
+        includeAncestors: true,
         limit: clampLimit(input.limit),
         sessionId: context.sessionId,
         userId: context.userId,
