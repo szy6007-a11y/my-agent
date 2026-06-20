@@ -7,6 +7,7 @@ import {
   jsonb,
   type AnyPgColumn,
   pgTable,
+  uniqueIndex,
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
@@ -58,6 +59,33 @@ export const messages = pgTable(
     index("messages_content_fts_idx").using(
       "gin",
       sql`to_tsvector('simple', coalesce(${table.contentJson}->>'text', ''))`,
+    ),
+  ],
+);
+
+export const sessionShareTokens = pgTable(
+  "session_share_tokens",
+  {
+    id: text("id").primaryKey(),
+    environment: text("environment").notNull(),
+    userId: text("user_id").notNull(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    upToMessageId: text("up_to_message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("session_share_tokens_token_idx").on(table.token),
+    index("session_share_tokens_env_user_session_idx").on(
+      table.environment,
+      table.userId,
+      table.sessionId,
+      table.createdAt.desc(),
     ),
   ],
 );

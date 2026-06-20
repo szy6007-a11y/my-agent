@@ -26,6 +26,22 @@ export type AgentMessage = {
   createdAt: string;
 };
 
+export type ChatSessionSummary = {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+export type SharedAgentSession = {
+  token: string;
+  createdAt: string;
+  session: ChatSessionSummary;
+  messages: AgentMessage[];
+};
+
 export type PermissionMode =
   | "read-only"
   | "ask-on-write"

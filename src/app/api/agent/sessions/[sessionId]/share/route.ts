@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 
 import { sessionRepository } from "@/agent/sessions/SessionRepository";
-import { toVisibleChatMessages } from "@/agent/sessions/visible-messages";
 import { getAuthenticatedUser, getAuthEnvironment } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -10,7 +10,11 @@ type RouteContext = {
   params: Promise<{ sessionId: string }>;
 };
 
-export async function GET(request: NextRequest, context: RouteContext) {
+const requestSchema = z.object({
+  upToMessageId: z.string().min(1),
+});
+
+export async function POST(request: NextRequest, context: RouteContext) {
   const auth = await getAuthenticatedUser(request);
 
   if (!auth) {
@@ -24,36 +28,36 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
 
   const { sessionId } = await context.params;
-  const requestedSession = await sessionRepository.getSessionForUser(
-    sessionId,
-    auth.user.id,
-  );
-  const session =
-    requestedSession ?
-      (await sessionRepository.resolveCompressionHead({
-        sessionId: requestedSession.id,
-        userId: auth.user.id,
-      })) ?? requestedSession
-    : null;
+  const body = requestSchema.safeParse(await request.json().catch(() => null));
 
-  if (!session) {
+  if (!body.success) {
     return NextResponse.json(
       {
-        error: "会话不存在",
+        error: "upToMessageId 无效",
+        environment: getAuthEnvironment(),
+      },
+      { status: 400 },
+    );
+  }
+
+  const share = await sessionRepository.createShareToken({
+    sessionId,
+    upToMessageId: body.data.upToMessageId,
+    userId: auth.user.id,
+  });
+
+  if (!share) {
+    return NextResponse.json(
+      {
+        error: "会话或消息不存在",
         environment: getAuthEnvironment(),
       },
       { status: 404 },
     );
   }
 
-  const messages = await sessionRepository.listMessages(session.id, {
-    limit: 120,
-    userId: auth.user.id,
-  });
-
   return NextResponse.json({
     environment: getAuthEnvironment(),
-    messages: toVisibleChatMessages(messages),
-    session,
+    share,
   });
 }

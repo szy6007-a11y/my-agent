@@ -29,6 +29,8 @@ import {
   TRUSTED_SYSTEM_REMINDER_SENTINEL,
   stripTrustedRuntimeReminder,
 } from "@/shared/runtime-reminder";
+import type { SharedAgentSession } from "@/shared/agent-protocol";
+import { toVisibleChatMessages } from "@/agent/sessions/visible-messages";
 
 type StoredMessageRow = {
   id: string;
@@ -73,6 +75,16 @@ type StoredSessionRow = {
   created_at: Date;
   updated_at: Date;
   message_count: number;
+};
+
+type StoredShareRow = {
+  token: string;
+  share_created_at: Date;
+  session_id: string;
+  session_title: string;
+  session_status: string;
+  session_created_at: Date;
+  session_updated_at: Date;
 };
 
 type SessionLineageRow = {
@@ -1053,6 +1065,138 @@ export class SessionRepository {
     `;
 
     return rows.reverse().map(toAgentMessage);
+  }
+
+  async createShareToken(input: {
+    sessionId: string;
+    upToMessageId: string;
+    userId: string;
+  }): Promise<{ shareUrl: string; token: string } | null> {
+    await ready();
+    const db = getSql();
+    const id = `share_token_${randomUUID()}`;
+    const token = `share_${randomUUID()}`;
+    const rows = await db<{ token: string }[]>`
+      with target_message as (
+        select m.id
+        from messages m
+        join sessions s on s.id = m.session_id
+        where s.id = ${input.sessionId}
+          and s.user_id = ${input.userId}
+          and s.environment = ${serverEnv.APP_ENV}
+          and m.id = ${input.upToMessageId}
+          and m.role = 'assistant'
+          and coalesce(m.content_json->>'kind', '') <> ${CONTEXT_SUMMARY_KIND}
+          and not (m.content_json ? 'toolCalls')
+        limit 1
+      )
+      insert into session_share_tokens (
+        id,
+        environment,
+        user_id,
+        session_id,
+        up_to_message_id,
+        token
+      )
+      select
+        ${id},
+        ${serverEnv.APP_ENV},
+        ${input.userId},
+        ${input.sessionId},
+        target_message.id,
+        ${token}
+      from target_message
+      returning token
+    `;
+    const created = rows[0];
+
+    if (!created) {
+      return null;
+    }
+
+    return {
+      shareUrl: `/s/${created.token}`,
+      token: created.token,
+    };
+  }
+
+  async getSharedSession(token: string): Promise<SharedAgentSession | null> {
+    await ready();
+    const db = getSql();
+    const shareRows = await db<StoredShareRow[]>`
+      select
+        st.token,
+        st.created_at as share_created_at,
+        s.id as session_id,
+        s.title as session_title,
+        s.status as session_status,
+        s.created_at as session_created_at,
+        s.updated_at as session_updated_at
+      from session_share_tokens st
+      join sessions s on s.id = st.session_id
+      where st.token = ${token}
+        and st.environment = ${serverEnv.APP_ENV}
+        and s.environment = ${serverEnv.APP_ENV}
+        and st.revoked_at is null
+      limit 1
+    `;
+    const share = shareRows[0];
+
+    if (!share) {
+      return null;
+    }
+
+    const rows = await db<StoredMessageRow[]>`
+      with ordered as (
+        select
+          m.id,
+          m.role,
+          m.content_json,
+          m.tool_call_id,
+          m.tool_name,
+          m.created_at,
+          row_number() over (order by m.created_at, m.id)::int as rn
+        from messages m
+        join session_share_tokens st on st.session_id = m.session_id
+        where st.token = ${token}
+          and st.environment = ${serverEnv.APP_ENV}
+          and st.revoked_at is null
+      ),
+      target as (
+        select ordered.rn
+        from ordered
+        join session_share_tokens st on st.up_to_message_id = ordered.id
+        where st.token = ${token}
+          and st.environment = ${serverEnv.APP_ENV}
+          and st.revoked_at is null
+        limit 1
+      )
+      select
+        ordered.id,
+        ordered.role,
+        ordered.content_json,
+        ordered.tool_call_id,
+        ordered.tool_name,
+        ordered.created_at
+      from ordered
+      join target on ordered.rn <= target.rn
+      order by ordered.rn
+    `;
+    const messages = toVisibleChatMessages(rows.map(toAgentMessage));
+
+    return {
+      createdAt: share.share_created_at.toISOString(),
+      messages,
+      session: {
+        id: share.session_id,
+        title: share.session_title,
+        status: share.session_status,
+        createdAt: share.session_created_at.toISOString(),
+        updatedAt: share.session_updated_at.toISOString(),
+        messageCount: messages.length,
+      },
+      token: share.token,
+    };
   }
 
   async discoverSessions(input: {

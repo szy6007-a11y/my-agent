@@ -602,6 +602,97 @@ body > button[aria-label="Open Next.js Dev Tools"],
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
+.shared-shell {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+  background: #ffffff;
+}
+
+.shared-header {
+  display: flex;
+  width: min(860px, 100%);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--border);
+  padding: 18px max(20px, calc((100% - 760px) / 2)) 14px;
+}
+
+.shared-header div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.shared-header strong {
+  color: #171717;
+  font-size: 16px;
+  font-weight: 720;
+}
+
+.shared-header span,
+.shared-header time,
+.shared-title span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.shared-header time {
+  flex: 0 0 auto;
+}
+
+.shared-title {
+  display: grid;
+  width: min(760px, 100%);
+  gap: 6px;
+  margin: 0 auto;
+  padding: 26px max(20px, calc((100% - 760px) / 2)) 6px;
+}
+
+.shared-title h1 {
+  margin: 0;
+  color: #171717;
+  font-size: 24px;
+  font-weight: 680;
+  letter-spacing: 0;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.shared-messages {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 34px;
+  padding: 26px max(24px, calc((100% - 760px) / 2)) 64px;
+}
+
+.shared-state {
+  display: grid;
+  width: min(360px, calc(100% - 40px));
+  gap: 6px;
+  margin: auto;
+  justify-items: center;
+  text-align: center;
+}
+
+.shared-state strong {
+  color: #171717;
+  font-size: 20px;
+  font-weight: 680;
+}
+
+.shared-state span {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .messages {
   display: flex;
   min-height: 0;

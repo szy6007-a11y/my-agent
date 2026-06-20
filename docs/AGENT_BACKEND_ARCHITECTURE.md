@@ -709,6 +709,8 @@ MVP API：
 | `GET` | `/api/agent/sessions` | 会话列表 |
 | `GET` | `/api/agent/sessions/:sessionId` | 会话详情 |
 | `GET` | `/api/agent/sessions/:sessionId/messages` | 消息历史 |
+| `POST` | `/api/agent/sessions/:sessionId/share` | 为当前用户会话生成只读分享 token |
+| `GET` | `/api/agent/shared/:token` | 无登录态读取分享 token 对应的只读会话片段 |
 | `POST` | `/api/agent/sessions/:sessionId/compact` | 手动压缩 |
 | `GET` | `/api/agent/tools` | 当前可用工具和权限 |
 | `GET` | `/api/agent/skills` | 当前用户已安装、禁用和待启用的 Skill |

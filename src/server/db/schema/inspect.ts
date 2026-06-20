@@ -17,6 +17,8 @@ export const REQUIRED_DATABASE_INDEXES = [
   "messages_content_fts_idx",
   "messages_session_created_idx",
   "run_events_run_created_idx",
+  "session_share_tokens_env_user_session_idx",
+  "session_share_tokens_token_idx",
   "sessions_environment_user_updated_idx",
   "sessions_parent_idx",
   "installed_skills_env_user_slug_idx",

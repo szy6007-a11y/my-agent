@@ -9,6 +9,7 @@ import {
   Copy,
   Download,
   FileText,
+  Link2,
   LogOut,
   Library,
   MoreHorizontal,
@@ -18,8 +19,6 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { code as streamdownCode } from "@streamdown/code";
-import { Streamdown } from "streamdown";
 
 import type {
   ServiceHealthSnapshot,
@@ -35,6 +34,7 @@ import type {
   AskUserQuestionResponse,
 } from "@/shared/agent-protocol";
 import { stripTrustedRuntimeReminder } from "@/shared/runtime-reminder";
+import { MarkdownMessage } from "@/components/markdown-message";
 
 type ChatMessage = {
   id: string;
@@ -124,6 +124,46 @@ const MAX_CONSOLE_LOGS = 28;
 const COMPOSER_TEXTAREA_MAX_HEIGHT = 120;
 const SCROLL_BOTTOM_FALLBACK_THRESHOLD = 96;
 const SCROLL_BOTTOM_ROOT_MARGIN = "0px 0px -96px 0px";
+
+function chatPath(sessionId: string | null) {
+  return sessionId ? `/chat/${encodeURIComponent(sessionId)}` : "/chat";
+}
+
+function updateChatPath(sessionId: string | null, mode: "push" | "replace" = "push") {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const nextPath = chatPath(sessionId);
+  if (window.location.pathname === nextPath) {
+    return;
+  }
+  window.history[mode === "replace" ? "replaceState" : "pushState"](null, "", nextPath);
+}
+
+function fullShareUrl(shareUrl: string) {
+  if (typeof window === "undefined") {
+    return shareUrl;
+  }
+  return new URL(shareUrl, window.location.origin).href;
+}
+
+async function writeClipboardText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const element = document.createElement("textarea");
+  element.value = text;
+  element.setAttribute("readonly", "");
+  element.style.position = "fixed";
+  element.style.left = "-9999px";
+  element.style.top = "0";
+  document.body.appendChild(element);
+  element.select();
+  document.execCommand("copy");
+  document.body.removeChild(element);
+}
 
 function parseSseEvent(eventText: string): AgentEvent | null {
   const dataLines = eventText
@@ -901,44 +941,11 @@ function AskUserQuestionApproval({
   );
 }
 
-function MarkdownMessage({
-  content,
-  isStreaming,
+export function ChatWorkspace({
+  initialSessionId = null,
 }: {
-  content: string;
-  isStreaming: boolean;
+  initialSessionId?: string | null;
 }) {
-  return (
-    <Streamdown
-      className="markdown-content"
-      controls={{
-        code: {
-          copy: true,
-          download: false,
-        },
-        mermaid: false,
-        table: false,
-      }}
-      dir="auto"
-      isAnimating={isStreaming}
-      lineNumbers={false}
-      mode={isStreaming ? "streaming" : "static"}
-      normalizeHtmlIndentation
-      parseIncompleteMarkdown={isStreaming}
-      plugins={{ code: streamdownCode }}
-      shikiTheme={["github-light", "github-light"]}
-      skipHtml
-      translations={{
-        copied: "已复制",
-        copyCode: "复制代码",
-      }}
-    >
-      {content || " "}
-    </Streamdown>
-  );
-}
-
-export function ChatWorkspace() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [appEnvironment, setAppEnvironment] =
@@ -955,6 +962,7 @@ export function ChatWorkspace() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [copiedShareMessageId, setCopiedShareMessageId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [monitorConnection, setMonitorConnection] =
     useState<MonitorConnection>("connecting");
@@ -970,6 +978,7 @@ export function ChatWorkspace() {
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const initialSessionLoadedRef = useRef<string | null>(null);
   const lastScrollTopRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -1177,6 +1186,7 @@ export function ChatWorkspace() {
     const shouldScroll = isAtBottomRef.current && !userDetachedFromBottomRef.current;
 
     setSessionId(body.session.id);
+    updateChatPath(body.session.id, "replace");
     setMessages((current) =>
       messagesChanged(current, nextMessages) ? nextMessages : current,
     );
@@ -1454,6 +1464,59 @@ export function ChatWorkspace() {
     };
   }, [appendConsoleLog, authStatus]);
 
+  const stopStreaming = useCallback(async () => {
+    const runId = activeRun?.runId;
+
+    if (runId) {
+      setActiveRun((current) =>
+        current?.runId === runId ? { ...current, status: "cancelling" } : current,
+      );
+
+      try {
+        const response = await fetch(
+          `/api/agent/runs/${encodeURIComponent(runId)}/cancel`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: "user_cancelled" }),
+          },
+        );
+
+        if (response.status === 401) {
+          handleUnauthorized();
+        } else if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+      } catch (error) {
+        appendConsoleLog({
+          at: new Date().toISOString(),
+          level: "error",
+          source: "agent",
+          message:
+            error instanceof Error ? `停止运行失败：${error.message}` : "停止运行失败",
+        });
+      }
+    }
+
+    abortControllerRef.current?.abort();
+    setPendingApprovals((current) =>
+      runId ? current.filter((approval) => approval.runId !== runId) : current,
+    );
+    setActiveRun((current) => (runId && current?.runId === runId ? null : current));
+    setMessages((current) =>
+      current.map((message) =>
+        message.role === "assistant" && message.status === "streaming" ?
+          {
+            ...message,
+            content: message.content.trim() ? message.content : "已停止。",
+            status: "aborted",
+          }
+        : message,
+      ),
+    );
+    setIsStreaming(false);
+  }, [activeRun?.runId, appendConsoleLog, handleUnauthorized]);
+
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1510,11 +1573,13 @@ export function ChatWorkspace() {
     await fetch("/api/auth/logout", { method: "POST" });
     setAuthStatus("anonymous");
     setAuthUser(null);
+    updateChatPath(null, "replace");
     clearWorkspace();
   }
 
   function startNewChat() {
     stopStreaming();
+    updateChatPath(null);
     autoScrollRef.current = true;
     isAtBottomRef.current = true;
     lastScrollTopRef.current = 0;
@@ -1528,7 +1593,7 @@ export function ChatWorkspace() {
     setShowScrollToBottom(false);
   }
 
-  async function openSession(nextSessionId: string) {
+  const openSession = useCallback(async (nextSessionId: string, mode: "push" | "replace" = "push") => {
     if (nextSessionId === sessionId || isLoadingSession) {
       return;
     }
@@ -1555,7 +1620,9 @@ export function ChatWorkspace() {
         session?: { id: string };
       };
 
-      setSessionId(body.session?.id ?? nextSessionId);
+      const resolvedSessionId = body.session?.id ?? nextSessionId;
+      setSessionId(resolvedSessionId);
+      updateChatPath(resolvedSessionId, mode);
       setAgentTasks([]);
       setTaskPanelExpanded(false);
       setTaskSyncedAt(null);
@@ -1576,7 +1643,20 @@ export function ChatWorkspace() {
     } finally {
       setIsLoadingSession(false);
     }
-  }
+  }, [appendConsoleLog, handleUnauthorized, isLoadingSession, sessionId, stopStreaming]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !initialSessionId) {
+      return;
+    }
+
+    if (initialSessionLoadedRef.current === initialSessionId) {
+      return;
+    }
+
+    initialSessionLoadedRef.current = initialSessionId;
+    void openSession(initialSessionId, "replace");
+  }, [authStatus, initialSessionId, openSession]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1660,6 +1740,7 @@ export function ChatWorkspace() {
 
           if (event.type === "run.accepted") {
             setSessionId(event.sessionId);
+            updateChatPath(event.sessionId, "replace");
             setActiveRun({
               queueMode: event.queueMode,
               runId: event.runId,
@@ -1723,6 +1804,7 @@ export function ChatWorkspace() {
             if (event.sessionId) {
               const compactedSessionId = event.sessionId;
               setSessionId(compactedSessionId);
+              updateChatPath(compactedSessionId, "replace");
               setActiveRun((current) =>
                 current ? { ...current, sessionId: compactedSessionId } : current,
               );
@@ -1961,6 +2043,7 @@ export function ChatWorkspace() {
                     : assistant?.artifacts?.length ?
                       "文件已生成，可以直接下载。"
                     : "没有收到模型回复，请再试一次。",
+                  id: event.finalMessageId,
                   status: "complete",
                 },
               );
@@ -2046,11 +2129,64 @@ export function ChatWorkspace() {
       return;
     }
 
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
     setCopiedMessageId(message.id);
     window.setTimeout(() => {
       setCopiedMessageId((current) => (current === message.id ? null : current));
     }, 1600);
+  }
+
+  async function shareMessage(message: ChatMessage) {
+    if (!sessionId || message.role !== "assistant" || message.status === "streaming") {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/agent/sessions/${encodeURIComponent(sessionId)}/share`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ upToMessageId: message.id }),
+        },
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(String(response.status));
+      }
+
+      const body = (await response.json()) as {
+        share?: { shareUrl: string; token: string };
+      };
+      if (!body.share?.shareUrl) {
+        throw new Error("分享链接为空");
+      }
+
+      await writeClipboardText(fullShareUrl(body.share.shareUrl));
+      setCopiedShareMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedShareMessageId((current) => (current === message.id ? null : current));
+      }, 1800);
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "info",
+        source: "share",
+        message: "分享链接已复制",
+      });
+    } catch (error) {
+      appendConsoleLog({
+        at: new Date().toISOString(),
+        level: "error",
+        source: "share",
+        message:
+          error instanceof Error ? `复制分享链接失败：${error.message}` : "复制分享链接失败",
+      });
+    }
   }
 
   async function resolveApproval(
@@ -2109,59 +2245,6 @@ export function ChatWorkspace() {
           error instanceof Error ? `审批提交失败：${error.message}` : "审批提交失败",
       });
     }
-  }
-
-  async function stopStreaming() {
-    const runId = activeRun?.runId;
-
-    if (runId) {
-      setActiveRun((current) =>
-        current?.runId === runId ? { ...current, status: "cancelling" } : current,
-      );
-
-      try {
-        const response = await fetch(
-          `/api/agent/runs/${encodeURIComponent(runId)}/cancel`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reason: "user_cancelled" }),
-          },
-        );
-
-        if (response.status === 401) {
-          handleUnauthorized();
-        } else if (!response.ok) {
-          throw new Error(String(response.status));
-        }
-      } catch (error) {
-        appendConsoleLog({
-          at: new Date().toISOString(),
-          level: "error",
-          source: "agent",
-          message:
-            error instanceof Error ? `停止运行失败：${error.message}` : "停止运行失败",
-        });
-      }
-    }
-
-    abortControllerRef.current?.abort();
-    setPendingApprovals((current) =>
-      runId ? current.filter((approval) => approval.runId !== runId) : current,
-    );
-    setActiveRun((current) => (runId && current?.runId === runId ? null : current));
-    setMessages((current) =>
-      current.map((message) =>
-        message.role === "assistant" && message.status === "streaming" ?
-          {
-            ...message,
-            content: message.content.trim() ? message.content : "已停止。",
-            status: "aborted",
-          }
-        : message,
-      ),
-    );
-    setIsStreaming(false);
   }
 
   if (authStatus === "checking") {
@@ -2440,6 +2523,23 @@ export function ChatWorkspace() {
                             <Check size={17} />
                           : <Copy size={17} />}
                         </button>
+                        {sessionId && (
+                          <button
+                            className="message-action-button"
+                            type="button"
+                            aria-label="复制分享链接"
+                            title={
+                              copiedShareMessageId === message.id ?
+                                "分享链接已复制"
+                              : "复制分享链接"
+                            }
+                            onClick={() => void shareMessage(message)}
+                          >
+                            {copiedShareMessageId === message.id ?
+                              <Check size={17} />
+                            : <Link2 size={17} />}
+                          </button>
+                        )}
                       </div>
                     )}
                 </div>

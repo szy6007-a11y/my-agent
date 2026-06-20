@@ -18,6 +18,7 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "installed_skills",
     "messages",
     "run_events",
+    "session_share_tokens",
     "sessions",
     "skill_audit_events",
     "skill_files",
@@ -78,6 +79,16 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "tool_call_id",
     "tool_name",
   ]);
+  assert.deepEqual([...schema.get("session_share_tokens") ?? []].sort(), [
+    "created_at",
+    "environment",
+    "id",
+    "revoked_at",
+    "session_id",
+    "token",
+    "up_to_message_id",
+    "user_id",
+  ]);
   assert.deepEqual([...schema.get("tool_approvals") ?? []].sort(), [
     "created_at",
     "decision_json",
@@ -94,5 +105,5 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "tool_name",
     "user_id",
   ]);
-  assert.equal(REQUIRED_DATABASE_INDEXES.length, 22);
+  assert.equal(REQUIRED_DATABASE_INDEXES.length, 24);
 });
