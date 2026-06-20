@@ -78,6 +78,15 @@ test("ask_user_question builds a structured interaction approval request", async
   });
 });
 
+test("ask_user_question description teaches when to call the tool", () => {
+  const description = askUserQuestionTool.definition.function.description;
+
+  assert.match(description, /Gather user preferences/);
+  assert.match(description, /Clarify ambiguous instructions/);
+  assert.match(description, /implementation choices/);
+  assert.match(description, /Do not add an Other option yourself/);
+});
+
 test("ask_user_question applies approval answers before execution", async () => {
   const approvedArgs = await askUserQuestionTool.applyApprovalDecision?.(
     questionInput,

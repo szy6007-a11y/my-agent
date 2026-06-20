@@ -24,6 +24,23 @@ const MAX_OPTIONS = 4;
 const MIN_OPTIONS = 2;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_PREVIEW_LENGTH = 20_000;
+const ASK_USER_QUESTION_DESCRIPTION = `Ask the user one or more multiple-choice questions during execution when their answer is needed before continuing.
+
+Use this tool to:
+1. Gather user preferences, requirements, constraints, or acceptance criteria.
+2. Clarify ambiguous instructions when the ambiguity changes implementation, scope, risk, or output.
+3. Get decisions on implementation choices, trade-offs, priority, or direction while you work.
+4. Understand why the user denied a tool call when that reason affects the next step.
+5. Follow a loaded skill or workflow that explicitly requires asking the user through a tool.
+
+Do not use this tool when the information can be retrieved with available tools, when the next step is low-risk and clearly requested, or just to ask whether to proceed with a plan.
+
+Usage notes:
+- The UI automatically provides an "Other" free-text option. Do not add an Other option yourself.
+- Use multi_select: true only when multiple answers can be selected.
+- If one option is recommended, put it first and append "(Recommended)" to the label.
+- Ask 1-4 questions, each with 2-4 substantive options.
+- Use preview only when the user needs to compare concrete artifacts such as code snippets, configuration, UI mockups, diffs, or diagrams.`;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ?
@@ -270,8 +287,7 @@ export const askUserQuestionTool: AgentTool = {
     type: "function",
     function: {
       name: "ask_user_question",
-      description:
-        "Ask the user one or more short multiple-choice questions when their answer is needed before continuing. The UI supplies an Other option automatically; do not include an Other option yourself.",
+      description: ASK_USER_QUESTION_DESCRIPTION,
       parameters: {
         type: "object",
         additionalProperties: false,

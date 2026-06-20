@@ -459,6 +459,9 @@ function AskUserQuestionApproval({
     questionHasAnswer(drafts, question),
   );
   const submitting = approval.state === "submitting";
+  const questionCountLabel =
+    request.questions.length === 1 ? "1 个问题" : `${request.questions.length} 个问题`;
+  const hasMultiSelect = request.questions.some((question) => question.multiSelect);
 
   function updateDraft(question: AskUserQuestion, update: (draft: AskQuestionDraft) => AskQuestionDraft) {
     setDrafts((current) => {
@@ -473,13 +476,18 @@ function AskUserQuestionApproval({
   return (
     <div className="question-approval" key={approval.approvalId}>
       <div className="question-approval-head">
+        <span className="question-status-dot" aria-hidden="true" />
         <span className="question-approval-copy">
-          <strong>{approval.toolName}</strong>
+          <strong>需要你的选择</strong>
           <span>{approval.reason}</span>
+        </span>
+        <span className="question-approval-meta">
+          <span>{questionCountLabel}</span>
+          {hasMultiSelect && <span>可多选</span>}
         </span>
         <button
           aria-label={`拒绝 ${approval.toolName}`}
-          className="approval-action reject"
+          className="approval-action question-reject-button reject"
           disabled={submitting}
           onClick={() => onReject(approval)}
           title="拒绝"
@@ -497,7 +505,13 @@ function AskUserQuestionApproval({
 
         return (
           <div className="question-block" key={`${question.question}-${questionIndex}`}>
-            <span className="question-kicker">{question.header}</span>
+            <div className="question-block-head">
+              <span className="question-index">
+                {questionIndex + 1}/{request.questions.length}
+              </span>
+              <span className="question-kicker">{question.header}</span>
+              {question.multiSelect && <span className="question-mode">多选</span>}
+            </div>
             <strong className="question-title">{question.question}</strong>
             <div className="question-options">
               {question.options.map((option) => {
@@ -535,6 +549,9 @@ function AskUserQuestionApproval({
                       }}
                       type={question.multiSelect ? "checkbox" : "radio"}
                     />
+                    <span className="question-option-marker" aria-hidden="true">
+                      {checked && <Check size={12} />}
+                    </span>
                     <span className="question-option-copy">
                       <strong>{option.label}</strong>
                       <span>{option.description}</span>
@@ -543,6 +560,9 @@ function AskUserQuestionApproval({
                 );
               })}
               <label className={`question-option other ${draft.other.trim() ? "selected" : ""}`}>
+                <span className="question-option-marker" aria-hidden="true">
+                  {draft.other.trim() ? <Check size={12} /> : null}
+                </span>
                 <span className="question-option-copy">
                   <strong>其他</strong>
                   <input
@@ -588,6 +608,9 @@ function AskUserQuestionApproval({
       })}
 
       <div className="question-approval-footer">
+        <span className="question-submit-hint">
+          {allAnswered ? "已可提交" : "每个问题都需要一个答案"}
+        </span>
         <button
           className="question-submit"
           disabled={!allAnswered || submitting}
@@ -595,7 +618,7 @@ function AskUserQuestionApproval({
           type="button"
         >
           <Check size={16} />
-          提交回答
+          提交选择
         </button>
       </div>
     </div>

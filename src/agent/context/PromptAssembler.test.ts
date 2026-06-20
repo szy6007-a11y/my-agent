@@ -12,7 +12,7 @@ test("PromptAssembler includes the production output protocol contract", async (
     platform: "webui",
   });
 
-  assert.equal(assembly.metadata?.promptVersion, "2026-06-19.hermes-tool-guidance-v3");
+  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.ask-user-question-guidance-v1");
   assert.match(assembly.prompt, /<output_protocol_guidance/);
   assert.match(assembly.prompt, /工具只能通过系统原生 tool call 通道调用/);
   assert.match(assembly.prompt, /禁止把工具调用写成 XML、HTML、Markdown、JSON、函数调用文本、DSML/);
@@ -69,6 +69,27 @@ test("PromptAssembler omits Hermes tool guidance when no tools are available", a
   assert.doesNotMatch(assembly.prompt, /<hermes_task_completion_guidance/);
   assert.doesNotMatch(assembly.prompt, /<hermes_tool_use_enforcement_guidance/);
   assert.doesNotMatch(assembly.prompt, /<hermes_openai_model_execution_guidance/);
+});
+
+test("PromptAssembler injects ask_user_question guidance only when the tool is available", async () => {
+  const { PromptAssembler } = await import("@/agent/context/PromptAssembler");
+  const withQuestionTool = new PromptAssembler().assemble({
+    availableTools: ["ask_user_question", "web_search"],
+    model: "deepseek-v4-pro",
+    now: new Date("2026-06-20T00:00:00.000Z"),
+    platform: "webui",
+  });
+  const withoutQuestionTool = new PromptAssembler().assemble({
+    availableTools: ["web_search"],
+    model: "deepseek-v4-pro",
+    now: new Date("2026-06-20T00:00:00.000Z"),
+    platform: "webui",
+  });
+
+  assert.match(withQuestionTool.prompt, /<ask_user_question_guidance/);
+  assert.match(withQuestionTool.prompt, /必须调用该工具；不要用普通正文追问/);
+  assert.match(withQuestionTool.prompt, /用户界面会自动提供“其他”自由输入/);
+  assert.doesNotMatch(withoutQuestionTool.prompt, /<ask_user_question_guidance/);
 });
 
 test("prompt snapshot freshness includes Hermes model guidance hash", async () => {

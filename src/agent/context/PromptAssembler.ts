@@ -46,7 +46,7 @@ export type PromptAssemblerInput = {
   userId?: string;
 };
 
-const PROMPT_VERSION = "2026-06-19.hermes-tool-guidance-v3";
+const PROMPT_VERSION = "2026-06-20.ask-user-question-guidance-v1";
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 const TOOL_USE_ENFORCEMENT_MODELS = [
   "gpt",
@@ -220,6 +220,17 @@ function buildAvailableToolsSectionFromNames(tools: string[]): PromptSection {
   };
 }
 
+function buildAskUserQuestionGuidanceSection(tools: string[]): PromptSection | null {
+  if (!tools.includes("ask_user_question")) {
+    return null;
+  }
+
+  return {
+    ...readPromptFragment("ask-user-question-guidance.md"),
+    tag: "ask_user_question_guidance",
+  };
+}
+
 function buildSkillsSection(input: RequiredPromptInput): PromptSection {
   const index = buildSkillIndex(input.cwd, { userId: input.userId });
   const status = index.entries.length > 0 ? "indexed" : "empty";
@@ -380,6 +391,7 @@ export class PromptAssembler {
         (section) => section.tag === "hermes_task_completion_guidance",
       ),
       { ...readPromptFragment("tool-guidance.md"), tag: "tool_guidance" },
+      buildAskUserQuestionGuidanceSection(availableTools),
       { ...readPromptFragment("output-protocol-guidance.md"), tag: "output_protocol_guidance" },
       buildAvailableToolsSectionFromNames(availableTools),
       ...hermesToolGuidanceSections.filter(
@@ -396,7 +408,7 @@ export class PromptAssembler {
       { ...readPromptFragment("skills-guidance.md"), tag: "skills_guidance" },
       buildSkillsSection(input),
       { ...readPromptFragment("platform-webui.md"), tag: "platform_guidance" },
-    ];
+    ].filter((section): section is PromptSection => section !== null);
 
     const context: PromptSection[] = [buildProjectContextSection(input.cwd)];
 
