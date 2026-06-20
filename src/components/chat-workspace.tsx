@@ -381,6 +381,36 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function appendMessageContent(
+  messages: ChatMessage[],
+  messageId: string,
+  text: string,
+) {
+  return messages.map((message) =>
+    message.id === messageId ?
+      { ...message, content: message.content + text }
+    : message,
+  );
+}
+
+function retractMessageContent(
+  messages: ChatMessage[],
+  messageId: string,
+  text: string,
+) {
+  return messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+
+    if (message.content.endsWith(text)) {
+      return { ...message, content: message.content.slice(0, -text.length) };
+    }
+
+    return { ...message, content: message.content.replace(text, "") };
+  });
+}
+
 function updateMessage(
   messages: ChatMessage[],
   messageId: string,
@@ -1813,6 +1843,18 @@ export function ChatWorkspace({
                   `模型协议恢复重试：${event.toolName}`
                 : "模型协议恢复重试",
             });
+          }
+
+          if (event.type === "assistant.delta") {
+            setMessages((current) =>
+              appendMessageContent(current, assistantMessage.id, event.text),
+            );
+          }
+
+          if (event.type === "assistant.delta.retracted") {
+            setMessages((current) =>
+              retractMessageContent(current, assistantMessage.id, event.text),
+            );
           }
 
           if (event.type === "tool.started") {
