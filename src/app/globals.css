@@ -1161,6 +1161,120 @@ body > button[aria-label="Open Next.js Dev Tools"],
   font-size: 11px;
 }
 
+.task-panel {
+  display: grid;
+  gap: 6px;
+}
+
+.task-card {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  min-width: 0;
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #e8e8e8;
+  border-left-color: #8b8b8b;
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: #fbfbfb;
+  padding: 8px 9px 8px 7px;
+}
+
+.task-card.running {
+  border-left-color: #2563eb;
+}
+
+.task-card.completed {
+  border-left-color: #16a34a;
+}
+
+.task-card.failed,
+.task-card.cancelled,
+.task-card.interrupted {
+  border-left-color: #dc2626;
+}
+
+.task-card-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #555555;
+}
+
+.task-card.running .task-card-icon {
+  color: #2563eb;
+}
+
+.task-card.completed .task-card-icon {
+  color: #15803d;
+}
+
+.task-card.failed .task-card-icon,
+.task-card.cancelled .task-card-icon,
+.task-card.interrupted .task-card-icon {
+  color: #b91c1c;
+}
+
+.task-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.task-card-head,
+.task-card-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.task-card-head strong,
+.task-card-copy small,
+.task-card-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card-head strong {
+  min-width: 0;
+  color: #222222;
+  font-size: 12px;
+  font-weight: 690;
+}
+
+.task-card-head span {
+  flex: 0 0 auto;
+  border: 1px solid #e4e4e4;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #666666;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+}
+
+.task-card-copy small {
+  color: #555555;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.task-card-meta {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.task-card-meta span + span::before {
+  content: "·";
+  margin-right: 7px;
+  color: #b0b0b0;
+}
+
 .approval-copy small {
   font-size: 10px;
 }

@@ -52,6 +52,42 @@ export type ToolApprovalStatus = "pending" | "approved" | "rejected" | "expired"
 
 export type RunQueueMode = "followup" | "interrupt" | "steer" | "collect";
 
+export type AgentTaskKind = "task" | "subagent";
+
+export type AgentTaskStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export type AgentTaskSummary = {
+  id: string;
+  kind: AgentTaskKind;
+  status: AgentTaskStatus;
+  subject: string;
+  description: string;
+  activeForm?: string | null;
+  goal?: string;
+  context?: string;
+  role?: string;
+  background?: boolean;
+  toolsets?: string[];
+  model?: string | null;
+  parentSessionId?: string | null;
+  parentRunId?: string | null;
+  childSessionId?: string | null;
+  childRunId?: string | null;
+  resultPreview?: string | null;
+  error?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt: string;
+};
+
 export type AskUserQuestionOption = {
   label: string;
   description: string;
@@ -201,6 +237,58 @@ export type AgentEvent =
       runId: string;
       toolCallId: string;
       toolName: string;
+    }
+  | {
+      type: "task.created";
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "task.updated";
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "task.completed";
+      resultPreview?: string;
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "task.failed";
+      error: string;
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "task.cancelled";
+      reason?: string;
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "subagent.started";
+      activity?: string;
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "subagent.progress";
+      activity: string;
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "subagent.completed";
+      resultPreview?: string;
+      runId: string;
+      task: AgentTaskSummary;
+    }
+  | {
+      type: "subagent.failed";
+      error: string;
+      runId: string;
+      task: AgentTaskSummary;
     }
   | {
       type: "usage.updated";

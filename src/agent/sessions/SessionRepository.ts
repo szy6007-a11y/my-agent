@@ -9,6 +9,9 @@ import type {
   AgentMessage,
   AgentMessageContentKind,
   AgentRole,
+  AgentTaskKind,
+  AgentTaskStatus,
+  AgentTaskSummary,
   ModelToolCall,
   RunStatus,
   SequencedAgentEvent,
@@ -121,6 +124,33 @@ type ToolApprovalRow = {
   resolved_at: Date | null;
 };
 
+type StoredAgentTaskRow = {
+  id: string;
+  user_id: string;
+  parent_session_id: string;
+  parent_run_id: string | null;
+  child_session_id: string | null;
+  child_run_id: string | null;
+  kind: string;
+  status: string;
+  subject: string;
+  description: string;
+  active_form: string | null;
+  goal: string;
+  context: string;
+  role: string;
+  background: boolean;
+  toolsets_json: unknown;
+  model: string | null;
+  metadata_json: unknown;
+  result_json: unknown;
+  error_json: unknown;
+  created_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+  updated_at: Date;
+};
+
 export type StoredChatSession = {
   id: string;
   title: string;
@@ -209,6 +239,13 @@ export type StoredToolApproval = {
   resolvedAt: string | null;
 };
 
+export type StoredAgentTask = AgentTaskSummary & {
+  errorDetail: unknown;
+  metadata: unknown;
+  result: unknown;
+  userId: string;
+};
+
 export type ToolApprovalDecision = Extract<ToolApprovalStatus, "approved" | "rejected">;
 
 const APPROVAL_POLL_INTERVAL_MS = 250;
@@ -294,6 +331,87 @@ function isRunStatus(value: unknown): value is RunStatus {
   );
 }
 
+function isAgentTaskKind(value: unknown): value is AgentTaskKind {
+  return value === "task" || value === "subagent";
+}
+
+function isAgentTaskStatus(value: unknown): value is AgentTaskStatus {
+  return (
+    value === "pending" ||
+    value === "queued" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "interrupted"
+  );
+}
+
+function taskToolsets(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function taskErrorMessage(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+    if (typeof record.error === "string") {
+      return record.error;
+    }
+    if (typeof record.reason === "string") {
+      return record.reason;
+    }
+  }
+  try {
+    return JSON.stringify(value).slice(0, 500);
+  } catch {
+    return "Task failed.";
+  }
+}
+
+function taskResultPreview(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value.slice(0, 500);
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const candidate =
+      typeof record.summary === "string" ? record.summary
+      : typeof record.finalResponse === "string" ? record.finalResponse
+      : typeof record.result === "string" ? record.result
+      : typeof record.preview === "string" ? record.preview
+      : "";
+    if (candidate) {
+      return candidate.slice(0, 500);
+    }
+  }
+  try {
+    return JSON.stringify(value).slice(0, 500);
+  } catch {
+    return null;
+  }
+}
+
 function toStoredRun(row: StoredAgentRunRow): StoredAgentRun {
   return {
     id: row.id,
@@ -305,6 +423,37 @@ function toStoredRun(row: StoredAgentRunRow): StoredAgentRun {
     endedAt: row.ended_at?.toISOString() ?? null,
     error: row.error_json,
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+function toStoredAgentTask(row: StoredAgentTaskRow): StoredAgentTask {
+  return {
+    id: row.id,
+    activeForm: row.active_form,
+    background: row.background,
+    childRunId: row.child_run_id,
+    childSessionId: row.child_session_id,
+    completedAt: row.completed_at?.toISOString() ?? null,
+    context: row.context,
+    createdAt: row.created_at.toISOString(),
+    description: row.description,
+    error: taskErrorMessage(row.error_json),
+    errorDetail: row.error_json,
+    goal: row.goal,
+    kind: isAgentTaskKind(row.kind) ? row.kind : "task",
+    metadata: row.metadata_json,
+    model: row.model,
+    parentRunId: row.parent_run_id,
+    parentSessionId: row.parent_session_id,
+    result: row.result_json,
+    resultPreview: taskResultPreview(row.result_json),
+    role: row.role,
+    startedAt: row.started_at?.toISOString() ?? null,
+    status: isAgentTaskStatus(row.status) ? row.status : "failed",
+    subject: row.subject,
+    toolsets: taskToolsets(row.toolsets_json),
+    updatedAt: row.updated_at.toISOString(),
+    userId: row.user_id,
   };
 }
 
@@ -1501,6 +1650,357 @@ export class SessionRepository {
     `;
 
     return rows[0]?.id ?? null;
+  }
+
+  async createAgentTask(input: {
+    activeForm?: string | null;
+    background?: boolean;
+    context?: string;
+    description?: string;
+    goal?: string;
+    id?: string;
+    kind?: AgentTaskKind;
+    metadata?: unknown;
+    model?: string | null;
+    parentRunId?: string | null;
+    parentSessionId: string;
+    role?: string;
+    status?: AgentTaskStatus;
+    subject: string;
+    toolsets?: string[];
+    userId: string;
+  }): Promise<StoredAgentTask> {
+    await ready();
+    const db = getSql();
+    const id = input.id ?? `task_${randomUUID()}`;
+    const rows = await db<StoredAgentTaskRow[]>`
+      insert into agent_tasks (
+        id,
+        environment,
+        user_id,
+        parent_session_id,
+        parent_run_id,
+        kind,
+        status,
+        subject,
+        description,
+        active_form,
+        goal,
+        context,
+        role,
+        background,
+        toolsets_json,
+        model,
+        metadata_json
+      )
+      select
+        ${id},
+        ${serverEnv.APP_ENV},
+        s.user_id,
+        s.id,
+        ${input.parentRunId ?? null},
+        ${input.kind ?? "task"},
+        ${input.status ?? "pending"},
+        ${input.subject},
+        ${input.description ?? ""},
+        ${input.activeForm ?? null},
+        ${input.goal ?? ""},
+        ${input.context ?? ""},
+        ${input.role ?? "leaf"},
+        ${input.background ?? false},
+        ${db.json(toJson(input.toolsets ?? []))},
+        ${input.model ?? null},
+        ${db.json(toJson(input.metadata ?? {}))}
+      from sessions s
+      where s.id = ${input.parentSessionId}
+        and s.user_id = ${input.userId}
+        and s.environment = ${serverEnv.APP_ENV}
+      returning
+        id,
+        user_id,
+        parent_session_id,
+        parent_run_id,
+        child_session_id,
+        child_run_id,
+        kind,
+        status,
+        subject,
+        description,
+        active_form,
+        goal,
+        context,
+        role,
+        background,
+        toolsets_json,
+        model,
+        metadata_json,
+        result_json,
+        error_json,
+        created_at,
+        started_at,
+        completed_at,
+        updated_at
+    `;
+
+    if (!rows[0]) {
+      throw new Error("Session not found or not writable by user");
+    }
+
+    return toStoredAgentTask(rows[0]);
+  }
+
+  async getAgentTaskForUser(input: {
+    taskId: string;
+    userId: string;
+  }): Promise<StoredAgentTask | null> {
+    await ready();
+    const db = getSql();
+    const rows = await db<StoredAgentTaskRow[]>`
+      select
+        id,
+        user_id,
+        parent_session_id,
+        parent_run_id,
+        child_session_id,
+        child_run_id,
+        kind,
+        status,
+        subject,
+        description,
+        active_form,
+        goal,
+        context,
+        role,
+        background,
+        toolsets_json,
+        model,
+        metadata_json,
+        result_json,
+        error_json,
+        created_at,
+        started_at,
+        completed_at,
+        updated_at
+      from agent_tasks
+      where id = ${input.taskId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      limit 1
+    `;
+
+    return rows[0] ? toStoredAgentTask(rows[0]) : null;
+  }
+
+  async listAgentTasks(input: {
+    limit?: number;
+    sessionId: string;
+    userId: string;
+  }): Promise<StoredAgentTask[]> {
+    await ready();
+    const db = getSql();
+    const limit = Math.max(1, Math.min(input.limit ?? 25, 100));
+    const rows = await db<StoredAgentTaskRow[]>`
+      select
+        id,
+        user_id,
+        parent_session_id,
+        parent_run_id,
+        child_session_id,
+        child_run_id,
+        kind,
+        status,
+        subject,
+        description,
+        active_form,
+        goal,
+        context,
+        role,
+        background,
+        toolsets_json,
+        model,
+        metadata_json,
+        result_json,
+        error_json,
+        created_at,
+        started_at,
+        completed_at,
+        updated_at
+      from agent_tasks
+      where parent_session_id = ${input.sessionId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      order by updated_at desc, created_at desc
+      limit ${limit}
+    `;
+
+    return rows.map(toStoredAgentTask);
+  }
+
+  async updateAgentTask(input: {
+    activeForm?: string | null;
+    background?: boolean;
+    childRunId?: string | null;
+    childSessionId?: string | null;
+    completedAt?: string | null;
+    context?: string;
+    description?: string;
+    error?: unknown;
+    goal?: string;
+    metadata?: unknown;
+    model?: string | null;
+    result?: unknown;
+    role?: string;
+    startedAt?: string | null;
+    status?: AgentTaskStatus;
+    subject?: string;
+    taskId: string;
+    toolsets?: string[];
+    userId: string;
+  }): Promise<StoredAgentTask | null> {
+    const current = await this.getAgentTaskForUser({
+      taskId: input.taskId,
+      userId: input.userId,
+    });
+    if (!current) {
+      return null;
+    }
+
+    await ready();
+    const db = getSql();
+    const status = input.status ?? current.status;
+    const terminal =
+      status === "completed" ||
+      status === "failed" ||
+      status === "cancelled" ||
+      status === "interrupted";
+    const hasResult = Object.prototype.hasOwnProperty.call(input, "result");
+    const hasError = Object.prototype.hasOwnProperty.call(input, "error");
+    const hasMetadata = Object.prototype.hasOwnProperty.call(input, "metadata");
+    const startedAt =
+      input.startedAt === null ? null
+      : typeof input.startedAt === "string" ? new Date(input.startedAt)
+      : current.startedAt ? new Date(current.startedAt)
+      : null;
+    const completedAt =
+      input.completedAt === null ? null
+      : typeof input.completedAt === "string" ? new Date(input.completedAt)
+      : current.completedAt ? new Date(current.completedAt)
+      : null;
+
+    const rows = await db<StoredAgentTaskRow[]>`
+      update agent_tasks
+      set
+        subject = ${input.subject ?? current.subject},
+        description = ${input.description ?? current.description},
+        active_form = ${input.activeForm ?? current.activeForm ?? null},
+        goal = ${input.goal ?? current.goal ?? ""},
+        context = ${input.context ?? current.context ?? ""},
+        role = ${input.role ?? current.role ?? "leaf"},
+        background = ${input.background ?? current.background ?? false},
+        toolsets_json = ${db.json(toJson(input.toolsets ?? current.toolsets ?? []))},
+        model = ${input.model ?? current.model ?? null},
+        metadata_json = ${db.json(toJson(hasMetadata ? input.metadata : current.metadata ?? {}))},
+        result_json = ${hasResult ? db.json(toJson(input.result)) : current.result === null ? null : db.json(toJson(current.result))},
+        error_json = ${hasError ? db.json(toJson(input.error)) : current.errorDetail === null ? null : db.json(toJson(current.errorDetail))},
+        child_session_id = ${input.childSessionId ?? current.childSessionId ?? null},
+        child_run_id = ${input.childRunId ?? current.childRunId ?? null},
+        status = ${status},
+        started_at = case
+          when ${status} = 'running' and started_at is null then now()
+          else ${startedAt}
+        end,
+        completed_at = case
+          when ${terminal} and completed_at is null then now()
+          else ${completedAt}
+        end,
+        updated_at = now()
+      where id = ${input.taskId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+      returning
+        id,
+        user_id,
+        parent_session_id,
+        parent_run_id,
+        child_session_id,
+        child_run_id,
+        kind,
+        status,
+        subject,
+        description,
+        active_form,
+        goal,
+        context,
+        role,
+        background,
+        toolsets_json,
+        model,
+        metadata_json,
+        result_json,
+        error_json,
+        created_at,
+        started_at,
+        completed_at,
+        updated_at
+    `;
+
+    return rows[0] ? toStoredAgentTask(rows[0]) : null;
+  }
+
+  async cancelAgentTask(input: {
+    reason?: string;
+    taskId: string;
+    userId: string;
+  }): Promise<StoredAgentTask | null> {
+    await ready();
+    const db = getSql();
+    const reason = input.reason?.trim() || "cancelled";
+    const rows = await db<StoredAgentTaskRow[]>`
+      update agent_tasks
+      set
+        status = 'cancelled',
+        error_json = ${db.json(toJson({ reason }))},
+        completed_at = coalesce(completed_at, now()),
+        updated_at = now()
+      where id = ${input.taskId}
+        and user_id = ${input.userId}
+        and environment = ${serverEnv.APP_ENV}
+        and status not in ('completed', 'failed', 'cancelled', 'interrupted')
+      returning
+        id,
+        user_id,
+        parent_session_id,
+        parent_run_id,
+        child_session_id,
+        child_run_id,
+        kind,
+        status,
+        subject,
+        description,
+        active_form,
+        goal,
+        context,
+        role,
+        background,
+        toolsets_json,
+        model,
+        metadata_json,
+        result_json,
+        error_json,
+        created_at,
+        started_at,
+        completed_at,
+        updated_at
+    `;
+
+    if (rows[0]) {
+      return toStoredAgentTask(rows[0]);
+    }
+
+    return this.getAgentTaskForUser({
+      taskId: input.taskId,
+      userId: input.userId,
+    });
   }
 
   async listRunEvents(input: {

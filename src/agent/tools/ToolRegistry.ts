@@ -1,8 +1,10 @@
 import { askUserQuestionTool } from "@/agent/tools/AskUserQuestionTool";
+import { delegateTaskTool } from "@/agent/tools/DelegateTaskTool";
 import { createFileTools } from "@/agent/tools/FileTools";
 import { memoryTool } from "@/agent/tools/MemoryTool";
 import { sessionSearchTool } from "@/agent/tools/SessionSearchTool";
 import { createSkillTools } from "@/agent/tools/SkillTools";
+import { createTaskTools } from "@/agent/tools/TaskTools";
 import { createWebTools } from "@/agent/tools/WebTools";
 import {
   parseToolArguments,
@@ -14,15 +16,73 @@ import {
 import type { ModelToolCall, ModelToolDefinition } from "@/agent/runtime/types";
 import type { ToolUiManifest } from "@/shared/agent-protocol";
 
-function defaultTools(): AgentTool[] {
+export function createDefaultTools(): AgentTool[] {
   return [
     memoryTool,
     sessionSearchTool,
     askUserQuestionTool,
+    ...createTaskTools(),
+    delegateTaskTool,
     ...createWebTools(),
     ...createFileTools(),
     ...createSkillTools(),
   ];
+}
+
+const SUBAGENT_BLOCKED_TOOLS = new Set([
+  "activate_skill_install",
+  "ask_user_question",
+  "delegate_task",
+  "edit_file",
+  "install_github_skill",
+  "manage_skill",
+  "memory",
+  "skill_manage",
+  "task_cancel",
+  "task_create",
+  "task_list",
+  "task_output",
+  "task_update",
+  "write_file",
+  "write_file_chunk",
+]);
+
+function toolGroup(name: string): string | null {
+  if (name === "web_search" || name === "web_extract") {
+    return "web";
+  }
+  if (name === "read_file") {
+    return "file";
+  }
+  if (name === "session_search") {
+    return "session";
+  }
+  if (name === "skills_list" || name === "skill_view" || name === "list_installed_skills") {
+    return "skills";
+  }
+  return null;
+}
+
+export function createSubagentTools(toolsets: string[] = []): AgentTool[] {
+  const requested = new Set(
+    (toolsets.length > 0 ? toolsets : ["web", "file", "session", "skills"]).map((toolset) =>
+      toolset.trim().toLowerCase(),
+    ),
+  );
+
+  return createDefaultTools().filter((tool) => {
+    if (SUBAGENT_BLOCKED_TOOLS.has(tool.name)) {
+      return false;
+    }
+    if (tool.isReadOnly !== true || tool.requiresUserInteraction === true) {
+      return false;
+    }
+    if (tool.requiresApproval === true || typeof tool.requiresApproval === "function") {
+      return false;
+    }
+    const group = toolGroup(tool.name);
+    return group ? requested.has(group) : false;
+  });
 }
 
 function toolEnabled(tool: AgentTool): boolean {
@@ -36,7 +96,7 @@ function toolEnabled(tool: AgentTool): boolean {
 export class ToolRegistry {
   private readonly tools: Map<string, AgentTool>;
 
-  constructor(tools: AgentTool[] = defaultTools()) {
+  constructor(tools: AgentTool[] = createDefaultTools()) {
     this.tools = new Map(tools.filter(toolEnabled).map((tool) => [tool.name, tool]));
   }
 

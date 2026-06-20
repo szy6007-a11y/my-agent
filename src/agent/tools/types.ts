@@ -1,4 +1,5 @@
 import type {
+  AgentEvent,
   ModelToolCall,
   ModelToolDefinition,
   PermissionMode,
@@ -11,6 +12,8 @@ import type {
 import type { FileReadState } from "@/agent/tools/FileReadState";
 
 export type ToolExecutionContext = {
+  emitEvent?: (event: AgentEvent) => Promise<void> | void;
+  model?: string;
   permissionMode?: PermissionMode;
   readFileState?: FileReadState;
   runId: string;

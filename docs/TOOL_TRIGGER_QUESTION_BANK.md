@@ -1,11 +1,18 @@
 # Tool 触发单项测试题库
 
-本文档用于测试当前默认 `ToolRegistry` 中已启用的 15 个模型可见工具是否能被正确触发。题库关注“模型是否选择了正确 tool call”，不是测试工具执行结果的业务正确性。
+本文档用于测试当前默认 `ToolRegistry` 中已启用的模型可见工具是否能被正确触发。题库关注“模型是否选择了正确 tool call”，不是测试工具执行结果的业务正确性。
 
 当前默认工具列表来自 `new ToolRegistry().names`：
 
 - `memory`
 - `session_search`
+- `ask_user_question`
+- `task_create`
+- `task_list`
+- `task_update`
+- `task_output`
+- `task_cancel`
+- `delegate_task`
 - `web_search`
 - `read_file`
 - `write_file_chunk`
@@ -61,6 +68,13 @@
 | T13 | `list_installed_skills` | 列出我当前已安装的 Skills，包括 active、disabled 或 staged 状态和来源。 | 空参数对象 | 无 | `skills_list`, `Skill`, `skill_view` | 触发 `list_installed_skills`，不只列 skill index |
 | T14 | `skill_manage` | 创建一个名为 `tool-trigger-note-skill` 的本地 procedural Skill，描述为“记录工具触发测试笔记”，内容为一个最小 `SKILL.md`：当用户要求记录工具触发观察时，整理成中文 Markdown。 | `action=create`，`name=tool-trigger-note-skill`，`description` 和 `content` 填入题目内容 | 无 | `install_github_skill`, `manage_skill` | 触发 `skill_manage`，并进入写入审批流程 |
 | T15 | `manage_skill` | 禁用已安装 Skill `$TEST_INSTALLED_SKILL_NAME`。 | `action=disable`，`skill_name=$TEST_INSTALLED_SKILL_NAME` | 无 | `skill_manage`, `activate_skill_install` | 触发 `manage_skill`，并进入启用状态变更审批流程 |
+| T16 | `ask_user_question` | 我想把报告发给客户，但还没决定语气。请先问我一个问题，让我在“正式”“友好”“技术细节更多”里选一种，再继续。 | 至少一个问题，选项包含正式、友好、技术细节更多 | 无 | `memory`, `web_search` | 触发 `ask_user_question`，并进入问题卡片等待用户选择 |
+| T17 | `task_create` | 请同时完成三件事：梳理当前登录流程、找出可能的安全风险、最后给出验证清单。先建立任务再开始。 | `subject` 描述第一项或整体复杂工作，`status=pending` 或 `running` | 无 | `delegate_task` | 首个任务管理工具触发 `task_create` |
+| T18 | `task_list` | 列出这个会话里当前已有的任务和后台子代理状态。 | 空参数或合理 `limit` | 无 | `session_search` | 触发 `task_list`，不查历史会话 |
+| T19 | `task_update` | 把刚才创建的任务标记为完成，并记录结果：登录流程已梳理完，风险点待复核。 | `task_id` 指向已有任务，`status=completed`，`result` 包含题目结果 | `task_list` | `delegate_task` | 触发 `task_update`，产生 task completed 事件 |
+| T20 | `task_output` | 查看任务 `$TEST_TASK_ID` 的完整输出和结果详情。 | `task_id=$TEST_TASK_ID` | 无 | `task_list` | 触发 `task_output` 读取单个任务详情 |
+| T21 | `task_cancel` | 停止任务 `$TEST_TASK_ID`，原因是用户已经改方向，不需要继续。 | `task_id=$TEST_TASK_ID`，`reason` 包含改方向 | 无 | `task_update` | 触发 `task_cancel`，产生取消事件 |
+| T22 | `delegate_task` | 请启动一个后台子代理，独立检查 `src/agent/runtime` 里是否有明显的工具调用状态流风险；你先继续主线，不要等它完成。 | `goal` 自包含，`context` 包含路径和检查重点，`background=true` | 可先 `task_create` | `ask_user_question`, `write_file`, `edit_file` | 触发 `delegate_task`，返回后台任务句柄，不能声称子代理已完成 |
 
 ## 可选对照题
 

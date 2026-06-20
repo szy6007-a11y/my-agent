@@ -12,7 +12,7 @@ test("PromptAssembler includes the production output protocol contract", async (
     platform: "webui",
   });
 
-  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.ask-user-question-guidance-v1");
+  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.task-delegation-guidance-v1");
   assert.match(assembly.prompt, /<output_protocol_guidance/);
   assert.match(assembly.prompt, /工具只能通过系统原生 tool call 通道调用/);
   assert.match(assembly.prompt, /禁止把工具调用写成 XML、HTML、Markdown、JSON、函数调用文本、DSML/);
@@ -90,6 +90,21 @@ test("PromptAssembler injects ask_user_question guidance only when the tool is a
   assert.match(withQuestionTool.prompt, /必须调用该工具；不要用普通正文追问/);
   assert.match(withQuestionTool.prompt, /用户界面会自动提供“其他”自由输入/);
   assert.doesNotMatch(withoutQuestionTool.prompt, /<ask_user_question_guidance/);
+});
+
+test("PromptAssembler names task and delegation tools in stable guidance", async () => {
+  const { PromptAssembler } = await import("@/agent/context/PromptAssembler");
+  const assembly = new PromptAssembler().assemble({
+    availableTools: ["task_create", "task_update", "delegate_task", "web_search"],
+    model: "deepseek-v4-pro",
+    now: new Date("2026-06-20T00:00:00.000Z"),
+    platform: "webui",
+  });
+
+  assert.match(assembly.prompt, /`task_create`、`task_update`、`task_list`/);
+  assert.match(assembly.prompt, /用户明确要求后台任务、subagent、并行调研/);
+  assert.match(assembly.prompt, /默认使用 `background=true`/);
+  assert.match(assembly.prompt, /不要调用 `async`、`Task`、`Agent`/);
 });
 
 test("prompt snapshot freshness includes Hermes model guidance hash", async () => {

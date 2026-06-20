@@ -22,6 +22,13 @@
       "when": 1781913600000,
       "tag": "0002_compression_session_lineage",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782000000000,
+      "tag": "0003_agent_tasks",
+      "breakpoints": true
     }
   ]
 }

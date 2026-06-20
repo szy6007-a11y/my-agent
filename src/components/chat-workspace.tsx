@@ -30,6 +30,7 @@ import type {
 } from "@/lib/service-health";
 import type {
   AgentArtifact,
+  AgentTaskSummary,
   AgentEvent,
   AskUserQuestion,
   AskUserQuestionRequest,
@@ -83,6 +84,10 @@ type PendingApproval = {
   state: "pending" | "submitting";
   toolCallId: string;
   toolName: string;
+};
+
+type TaskCardState = AgentTaskSummary & {
+  lastActivity?: string;
 };
 
 type ServiceConsoleLog = {
@@ -141,6 +146,10 @@ function shortSessionId(sessionId: string) {
   return sessionId.replace(/^sess_/, "").slice(0, 8);
 }
 
+function shortTaskId(taskId: string) {
+  return taskId.replace(/^task_/, "").slice(0, 8);
+}
+
 function formatConsoleTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
@@ -190,6 +199,16 @@ function runStatusLabel(status: ActiveRunStatus) {
   if (status === "waiting_approval") return "等待确认";
   if (status === "cancelling") return "停止中";
   return "运行中";
+}
+
+function taskStatusLabel(status: AgentTaskSummary["status"]) {
+  if (status === "pending") return "待处理";
+  if (status === "queued") return "排队中";
+  if (status === "running") return "运行中";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "cancelled") return "已取消";
+  return "已中断";
 }
 
 function logLevelLabel(level: ServiceConsoleLog["level"]) {
@@ -332,6 +351,67 @@ function updateMessage(
   );
 }
 
+function taskEventUpdate(event: AgentEvent): { activity?: string; task: AgentTaskSummary } | null {
+  if (
+    event.type === "task.created" ||
+    event.type === "task.updated" ||
+    event.type === "task.completed" ||
+    event.type === "task.failed" ||
+    event.type === "task.cancelled"
+  ) {
+    return { task: event.task };
+  }
+
+  if (
+    event.type === "subagent.started" ||
+    event.type === "subagent.progress" ||
+    event.type === "subagent.completed" ||
+    event.type === "subagent.failed"
+  ) {
+    const activity =
+      event.type === "subagent.started" || event.type === "subagent.progress" ?
+        event.activity
+      : undefined;
+    return { activity, task: event.task };
+  }
+
+  return null;
+}
+
+function taskSortRank(task: TaskCardState) {
+  if (task.status === "running") return 0;
+  if (task.status === "queued" || task.status === "pending") return 1;
+  if (task.status === "failed" || task.status === "cancelled" || task.status === "interrupted") {
+    return 2;
+  }
+  return 3;
+}
+
+function upsertTaskCard(
+  tasks: TaskCardState[],
+  update: { activity?: string; task: AgentTaskSummary },
+) {
+  const nextTask: TaskCardState = {
+    ...update.task,
+    ...(update.activity ? { lastActivity: update.activity } : {}),
+  };
+  const merged = tasks.some((task) => task.id === update.task.id) ?
+    tasks.map((task) =>
+      task.id === update.task.id ?
+        {
+          ...task,
+          ...nextTask,
+          lastActivity: update.activity ?? task.lastActivity,
+        }
+      : task,
+    )
+  : [nextTask, ...tasks];
+
+  return merged
+    .sort((left, right) => taskSortRank(left) - taskSortRank(right))
+    .slice(0, 8);
+}
+
 function ArtifactList({ artifacts }: { artifacts?: AgentArtifact[] }) {
   if (!artifacts?.length) {
     return null;
@@ -362,6 +442,59 @@ function ArtifactList({ artifacts }: { artifacts?: AgentArtifact[] }) {
               <Download size={17} />
             </span>
           </a>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskStatusIcon({ status }: { status: AgentTaskSummary["status"] }) {
+  if (status === "completed") {
+    return <Check size={15} />;
+  }
+  if (status === "failed" || status === "cancelled" || status === "interrupted") {
+    return <X size={15} />;
+  }
+  if (status === "running") {
+    return <Activity size={15} />;
+  }
+  return <CircleStop size={15} />;
+}
+
+function TaskPanel({ tasks }: { tasks: TaskCardState[] }) {
+  if (tasks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="task-panel" aria-label="任务状态">
+      {tasks.map((task) => {
+        const detail =
+          task.lastActivity ||
+          task.activeForm ||
+          task.resultPreview ||
+          task.error ||
+          task.description ||
+          task.goal ||
+          "";
+        return (
+          <div className={`task-card ${task.status}`} key={task.id}>
+            <span className="task-card-icon" aria-hidden="true">
+              <TaskStatusIcon status={task.status} />
+            </span>
+            <span className="task-card-copy">
+              <span className="task-card-head">
+                <strong>{task.subject}</strong>
+                <span>{task.kind === "subagent" ? "子代理" : "任务"}</span>
+              </span>
+              {detail && <small>{detail}</small>}
+              <span className="task-card-meta">
+                <span>{taskStatusLabel(task.status)}</span>
+                <span>{shortTaskId(task.id)}</span>
+                {task.childRunId && <span>run {shortRunId(task.childRunId)}</span>}
+              </span>
+            </span>
+          </div>
         );
       })}
     </div>
@@ -687,6 +820,7 @@ export function ChatWorkspace() {
   const [consoleLogs, setConsoleLogs] = useState<ServiceConsoleLog[]>([]);
   const [activeRun, setActiveRun] = useState<ActiveRunState | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [agentTasks, setAgentTasks] = useState<TaskCardState[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
@@ -811,6 +945,7 @@ export function ChatWorkspace() {
     setConsoleLogs([]);
     setActiveRun(null);
     setPendingApprovals([]);
+    setAgentTasks([]);
     setMonitorConnection("connecting");
     setServiceSnapshot(null);
     autoScrollRef.current = true;
@@ -1091,6 +1226,7 @@ export function ChatWorkspace() {
     userDetachedFromBottomRef.current = false;
     setMessages([]);
     setSessionId(null);
+    setAgentTasks([]);
     setShowScrollToBottom(false);
   }
 
@@ -1126,6 +1262,7 @@ export function ChatWorkspace() {
       };
 
       setSessionId(nextSessionId);
+      setAgentTasks([]);
       autoScrollRef.current = true;
       isAtBottomRef.current = true;
       lastScrollTopRef.current = 0;
@@ -1182,6 +1319,9 @@ export function ChatWorkspace() {
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setActiveRun(null);
     setPendingApprovals([]);
+    if (!sessionId) {
+      setAgentTasks([]);
+    }
     setIsStreaming(true);
 
     const abortController = new AbortController();
@@ -1469,6 +1609,39 @@ export function ChatWorkspace() {
               source: "tool",
               message: `工具失败 ${event.toolName}：${event.error}`,
             });
+          }
+
+          const taskUpdate = taskEventUpdate(event);
+          if (taskUpdate) {
+            setAgentTasks((current) => upsertTaskCard(current, taskUpdate));
+            if (event.type === "task.created") {
+              appendConsoleLog({
+                at: new Date().toISOString(),
+                level: "info",
+                source: "task",
+                message: `任务已创建 ${taskUpdate.task.subject}`,
+              });
+            }
+            if (event.type === "task.completed" || event.type === "subagent.completed") {
+              appendConsoleLog({
+                at: new Date().toISOString(),
+                level: "info",
+                source: "task",
+                message: `任务完成 ${taskUpdate.task.subject}`,
+              });
+            }
+            if (
+              event.type === "task.failed" ||
+              event.type === "task.cancelled" ||
+              event.type === "subagent.failed"
+            ) {
+              appendConsoleLog({
+                at: new Date().toISOString(),
+                level: "warn",
+                source: "task",
+                message: `${taskStatusLabel(taskUpdate.task.status)} ${taskUpdate.task.subject}`,
+              });
+            }
           }
 
           if (event.type === "run.completed") {
@@ -2002,7 +2175,7 @@ export function ChatWorkspace() {
         )}
 
         <div className="composer-stack">
-          {(activeRun || pendingApprovals.length > 0) && (
+          {(activeRun || pendingApprovals.length > 0 || agentTasks.length > 0) && (
             <section className="run-panel" aria-label="运行状态">
               {activeRun && (
                 <div className="run-status-row">
@@ -2013,6 +2186,7 @@ export function ChatWorkspace() {
                   </span>
                 </div>
               )}
+              <TaskPanel tasks={agentTasks} />
               {pendingApprovals.map((approval) => {
                 const questionRequest = askUserQuestionRequestFromApproval(approval.request);
                 if (questionRequest) {

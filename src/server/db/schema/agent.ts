@@ -102,6 +102,51 @@ export const runEvents = pgTable(
   (table) => [index("run_events_run_created_idx").on(table.runId, table.createdAt)],
 );
 
+export const agentTasks = pgTable(
+  "agent_tasks",
+  {
+    id: text("id").primaryKey(),
+    environment: text("environment").notNull(),
+    userId: text("user_id").notNull(),
+    parentSessionId: text("parent_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    parentRunId: text("parent_run_id").references(() => agentRuns.id, { onDelete: "set null" }),
+    childSessionId: text("child_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    childRunId: text("child_run_id").references(() => agentRuns.id, { onDelete: "set null" }),
+    kind: text("kind").notNull().default("task"),
+    status: text("status").notNull().default("pending"),
+    subject: text("subject").notNull(),
+    description: text("description").notNull().default(""),
+    activeForm: text("active_form"),
+    goal: text("goal").notNull().default(""),
+    context: text("context").notNull().default(""),
+    role: text("role").notNull().default("leaf"),
+    background: boolean("background").notNull().default(false),
+    toolsetsJson: jsonb("toolsets_json").notNull().default(sql`'[]'::jsonb`),
+    model: text("model"),
+    metadataJson: jsonb("metadata_json").notNull().default(sql`'{}'::jsonb`),
+    resultJson: jsonb("result_json"),
+    errorJson: jsonb("error_json"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("agent_tasks_env_user_parent_updated_idx").on(
+      table.environment,
+      table.userId,
+      table.parentSessionId,
+      table.updatedAt.desc(),
+    ),
+    index("agent_tasks_parent_run_created_idx").on(table.parentRunId, table.createdAt),
+    index("agent_tasks_child_run_idx").on(table.childRunId),
+  ],
+);
+
 export const toolApprovals = pgTable(
   "tool_approvals",
   {

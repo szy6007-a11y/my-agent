@@ -57,6 +57,7 @@ const EMPTY_ASSISTANT_FALLBACK = "我没有生成有效回复，请再试一次�
 const VISIBLE_TOOL_CALL_CORRECTION_MARKER = "[protocol-correction:visible_tool_call]";
 
 export interface AgentLoopOptions {
+  backgroundReview?: boolean;
   maxToolRounds?: number;
 }
 
@@ -303,6 +304,10 @@ export class AgentLoop {
     let toolIterations = 0;
     let lastRunStatusPollAt = 0;
     const scheduleBackgroundReview = () => {
+      if (this.options.backgroundReview === false) {
+        return;
+      }
+
       void this.backgroundReview
         .maybeRun({
           model: input.model,
@@ -829,7 +834,12 @@ export class AgentLoop {
 
           let result: string;
           let durationMs = 0;
-          const toolContext = {
+          const toolSideEvents: AgentEvent[] = [];
+          const toolContext: ToolExecutionContext = {
+            emitEvent: (event) => {
+              toolSideEvents.push(event);
+            },
+            model: input.model,
             permissionMode,
             readFileState,
             runId: input.runId,
@@ -1009,6 +1019,10 @@ export class AgentLoop {
             toolName: effectiveToolCall.name,
             userId: input.userId,
           });
+
+          for (const event of toolSideEvents) {
+            yield event;
+          }
 
           if (failure) {
             yield {

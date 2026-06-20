@@ -7,6 +7,9 @@ export type ExpectedDatabaseSchema = Map<string, Set<string>>;
 
 export const REQUIRED_DATABASE_INDEXES = [
   "agent_runs_environment_session_created_idx",
+  "agent_tasks_child_run_idx",
+  "agent_tasks_env_user_parent_updated_idx",
+  "agent_tasks_parent_run_created_idx",
   "auth_login_attempts_bucket_idx",
   "auth_sessions_environment_token_idx",
   "auth_sessions_user_active_idx",

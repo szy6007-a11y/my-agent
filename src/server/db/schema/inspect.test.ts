@@ -11,6 +11,7 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
 
   assert.deepEqual([...schema.keys()].sort(), [
     "agent_runs",
+    "agent_tasks",
     "auth_login_attempts",
     "auth_sessions",
     "beta_users",
@@ -23,6 +24,34 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "skill_permissions",
     "skill_versions",
     "tool_approvals",
+  ]);
+
+  assert.deepEqual([...schema.get("agent_tasks") ?? []].sort(), [
+    "active_form",
+    "background",
+    "child_run_id",
+    "child_session_id",
+    "completed_at",
+    "context",
+    "created_at",
+    "description",
+    "environment",
+    "error_json",
+    "goal",
+    "id",
+    "kind",
+    "metadata_json",
+    "model",
+    "parent_run_id",
+    "parent_session_id",
+    "result_json",
+    "role",
+    "started_at",
+    "status",
+    "subject",
+    "toolsets_json",
+    "updated_at",
+    "user_id",
   ]);
 
   assert.deepEqual([...schema.get("sessions") ?? []].sort(), [
@@ -65,5 +94,5 @@ test("expectedDatabaseSchema covers runtime tables and required indexes", () => 
     "tool_name",
     "user_id",
   ]);
-  assert.equal(REQUIRED_DATABASE_INDEXES.length, 19);
+  assert.equal(REQUIRED_DATABASE_INDEXES.length, 22);
 });
