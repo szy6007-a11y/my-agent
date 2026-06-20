@@ -29,11 +29,17 @@ function indexOfIgnoreCase(value: string, search: string): number {
 
 function safeAnswerEmitLength(buffer: string): number {
   const lowerBuffer = buffer.toLowerCase();
-  const lowerCloseTag = FINAL_ANSWER_CLOSE_TAG.toLowerCase();
-  const maxSuffix = Math.min(buffer.length, FINAL_ANSWER_CLOSE_TAG.length - 1);
+  const tags = [
+    FINAL_ANSWER_OPEN_TAG.toLowerCase(),
+    FINAL_ANSWER_CLOSE_TAG.toLowerCase(),
+  ];
+  const maxSuffix = Math.min(
+    buffer.length,
+    Math.max(...tags.map((tag) => tag.length - 1)),
+  );
 
   for (let length = maxSuffix; length > 0; length -= 1) {
-    if (lowerCloseTag.startsWith(lowerBuffer.slice(-length))) {
+    if (tags.some((tag) => tag.startsWith(lowerBuffer.slice(-length)))) {
       return buffer.length - length;
     }
   }
@@ -55,22 +61,15 @@ export function stripFinalAnswerProtocolTags(text: string): string {
 export class FinalAnswerStream {
   private answerBuffer = "";
   private beforeAnswerBuffer = "";
-  private phase: "before_answer" | "answer" | "after_answer" = "before_answer";
+  private phase: "before_answer" | "answer" = "before_answer";
 
   get hasStartedAnswer(): boolean {
-    return this.phase === "answer" || this.phase === "after_answer";
+    return this.phase === "answer";
   }
 
   push(text: string): FinalAnswerStreamChunk {
     if (!text) {
       return emptyChunk();
-    }
-
-    if (this.phase === "after_answer") {
-      return {
-        ...emptyChunk(),
-        hiddenText: text,
-      };
     }
 
     if (this.phase === "answer") {
@@ -112,7 +111,6 @@ export class FinalAnswerStream {
     if (this.phase === "answer") {
       const answerText = stripTrailingCloseTagPrefix(this.answerBuffer);
       this.answerBuffer = "";
-      this.phase = "after_answer";
       return {
         answerText,
         fallbackAnswerText: "",
@@ -133,28 +131,14 @@ export class FinalAnswerStream {
     }
 
     this.answerBuffer += text;
-    const closeIndex = indexOfIgnoreCase(this.answerBuffer, FINAL_ANSWER_CLOSE_TAG);
-
-    if (closeIndex >= 0) {
-      const answerText = this.answerBuffer.slice(0, closeIndex);
-      const hiddenText = this.answerBuffer.slice(
-        closeIndex + FINAL_ANSWER_CLOSE_TAG.length,
-      );
-      this.answerBuffer = "";
-      this.phase = "after_answer";
-      return {
-        answerClosed: true,
-        answerStarted: false,
-        answerText,
-        hiddenText,
-      };
-    }
+    const answerClosed = /<\s*\/\s*final_answer\s*>/i.test(this.answerBuffer);
+    this.answerBuffer = stripFinalAnswerProtocolTags(this.answerBuffer);
 
     const safeLength = safeAnswerEmitLength(this.answerBuffer);
     const answerText = this.answerBuffer.slice(0, safeLength);
     this.answerBuffer = this.answerBuffer.slice(safeLength);
     return {
-      answerClosed: false,
+      answerClosed,
       answerStarted: false,
       answerText,
       hiddenText: "",

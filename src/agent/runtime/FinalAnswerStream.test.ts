@@ -24,8 +24,8 @@ test("FinalAnswerStream only emits text inside final_answer tags", () => {
   assert.deepEqual(stream.push("回答</final_answer>ignored"), {
     answerClosed: true,
     answerStarted: false,
-    answerText: "回答",
-    hiddenText: "ignored",
+    answerText: "回答ignored",
+    hiddenText: "",
   });
 });
 
@@ -37,6 +37,24 @@ test("FinalAnswerStream handles split answer tags without leaking them", () => {
   assert.equal(started.answerStarted, true);
   assert.equal(started.answerText, "hello");
   assert.equal(stream.push("wer>").answerText, "");
+  assert.deepEqual(stream.finish(), {
+    answerText: "",
+    fallbackAnswerText: "",
+    hiddenText: "",
+  });
+});
+
+test("FinalAnswerStream keeps natural text after an early close tag", () => {
+  const stream = new FinalAnswerStream();
+
+  assert.equal(
+    stream.push("<final_answer>现在信息已经比较充分了，整理如下：</final_answer>").answerText,
+    "现在信息已经比较充分了，整理如下：",
+  );
+  assert.equal(
+    stream.push("\n\n1. 明天是星期日。").answerText,
+    "\n\n1. 明天是星期日。",
+  );
   assert.deepEqual(stream.finish(), {
     answerText: "",
     fallbackAnswerText: "",
