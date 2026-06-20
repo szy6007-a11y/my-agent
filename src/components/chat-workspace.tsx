@@ -381,65 +381,6 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function appendMessageContent(
-  messages: ChatMessage[],
-  messageId: string,
-  text: string,
-) {
-  return messages.map((message) =>
-    message.id === messageId ?
-      { ...message, content: message.content + text }
-    : message,
-  );
-}
-
-function retractMessageContent(
-  messages: ChatMessage[],
-  messageId: string,
-  text: string,
-) {
-  return messages.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
-
-    if (message.content.endsWith(text)) {
-      return { ...message, content: message.content.slice(0, -text.length) };
-    }
-
-    return { ...message, content: message.content.replace(text, "") };
-  });
-}
-
-function appendMessageReasoning(
-  messages: ChatMessage[],
-  messageId: string,
-  text: string,
-) {
-  return messages.map((message) =>
-    message.id === messageId ?
-      { ...message, reasoningContent: `${message.reasoningContent ?? ""}${text}` }
-    : message,
-  );
-}
-
-function appendMessageArtifact(
-  messages: ChatMessage[],
-  messageId: string,
-  artifact: AgentArtifact,
-) {
-  return messages.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
-    const artifacts = message.artifacts ?? [];
-    if (artifacts.some((item) => item.id === artifact.id)) {
-      return message;
-    }
-    return { ...message, artifacts: [...artifacts, artifact] };
-  });
-}
-
 function updateMessage(
   messages: ChatMessage[],
   messageId: string,
@@ -995,6 +936,7 @@ export function ChatWorkspace({
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
+  const isStreamingRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const initialSessionLoadedRef = useRef<string | null>(null);
   const lastScrollTopRef = useRef(0);
@@ -1147,6 +1089,7 @@ export function ChatWorkspace({
     isAtBottomRef.current = true;
     lastScrollTopRef.current = 0;
     taskCompletionSignatureRef.current = "";
+    isStreamingRef.current = false;
     userDetachedFromBottomRef.current = false;
     setShowScrollToBottom(false);
   }, []);
@@ -1178,18 +1121,26 @@ export function ChatWorkspace({
     setSessions(body.sessions);
   }, [handleUnauthorized]);
 
-  const refreshCurrentSessionMessages = useCallback(async () => {
-    if (!sessionId || isStreaming) {
-      return;
+  const refreshCurrentSessionMessages = useCallback(async (input: {
+    allowWhileStreaming?: boolean;
+    sessionIdOverride?: string;
+  } = {}) => {
+    const targetSessionId = input.sessionIdOverride ?? sessionId;
+
+    if (
+      !targetSessionId ||
+      (!input.allowWhileStreaming && isStreamingRef.current)
+    ) {
+      return false;
     }
 
     const response = await fetch(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+      `/api/chat/sessions/${encodeURIComponent(targetSessionId)}/messages`,
     );
 
     if (response.status === 401) {
       handleUnauthorized();
-      return;
+      return false;
     }
 
     if (!response.ok) {
@@ -1212,7 +1163,9 @@ export function ChatWorkspace({
     if (shouldScroll) {
       requestAnimationFrame(() => scrollToBottom("smooth"));
     }
-  }, [handleUnauthorized, isStreaming, scrollToBottom, sessionId]);
+
+    return true;
+  }, [handleUnauthorized, scrollToBottom, sessionId]);
 
   const refreshSessionTasks = useCallback(
     async (input: { refreshMessagesOnCompletion?: boolean } = {}) => {
@@ -1532,6 +1485,7 @@ export function ChatWorkspace({
         : message,
       ),
     );
+    isStreamingRef.current = false;
     setIsStreaming(false);
   }, [activeRun?.runId, appendConsoleLog, handleUnauthorized]);
 
@@ -1709,10 +1663,12 @@ export function ChatWorkspace({
       setTaskSyncedAt(null);
       taskCompletionSignatureRef.current = "";
     }
+    isStreamingRef.current = true;
     setIsStreaming(true);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    let currentRunSessionId = sessionId;
 
     try {
       const response = await fetch("/api/agent/runs", {
@@ -1757,6 +1713,7 @@ export function ChatWorkspace({
           }
 
           if (event.type === "run.accepted") {
+            currentRunSessionId = event.sessionId;
             setSessionId(event.sessionId);
             updateChatPath(event.sessionId, "replace");
             setActiveRun({
@@ -1821,6 +1778,7 @@ export function ChatWorkspace({
           if (event.type === "context.compacted") {
             if (event.sessionId) {
               const compactedSessionId = event.sessionId;
+              currentRunSessionId = compactedSessionId;
               setSessionId(compactedSessionId);
               updateChatPath(compactedSessionId, "replace");
               setActiveRun((current) =>
@@ -1855,24 +1813,6 @@ export function ChatWorkspace({
                   `模型协议恢复重试：${event.toolName}`
                 : "模型协议恢复重试",
             });
-          }
-
-          if (event.type === "assistant.delta") {
-            setMessages((current) =>
-              appendMessageContent(current, assistantMessage.id, event.text),
-            );
-          }
-
-          if (event.type === "assistant.delta.retracted") {
-            setMessages((current) =>
-              retractMessageContent(current, assistantMessage.id, event.text),
-            );
-          }
-
-          if (event.type === "reasoning.delta") {
-            setMessages((current) =>
-              appendMessageReasoning(current, assistantMessage.id, event.text),
-            );
           }
 
           if (event.type === "tool.started") {
@@ -1977,9 +1917,6 @@ export function ChatWorkspace({
           }
 
           if (event.type === "artifact.created") {
-            setMessages((current) =>
-              appendMessageArtifact(current, assistantMessage.id, event.artifact),
-            );
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
@@ -2040,32 +1977,45 @@ export function ChatWorkspace({
               current.filter((approval) => approval.runId !== event.runId),
             );
             void refreshSessions();
-            void refreshSessionTasks({ refreshMessagesOnCompletion: true });
+            void refreshSessionTasks();
             appendConsoleLog({
               at: new Date().toISOString(),
               level: "info",
               source: "agent",
               message: `运行完成 ${shortRunId(event.runId)}`,
             });
-            setMessages((current) => {
-              const assistant = current.find(
-                (message) => message.id === assistantMessage.id,
+
+            let loadedFinalMessages = false;
+            try {
+              loadedFinalMessages = await refreshCurrentSessionMessages({
+                allowWhileStreaming: true,
+                sessionIdOverride: currentRunSessionId ?? undefined,
+              });
+            } catch (error) {
+              appendConsoleLog({
+                at: new Date().toISOString(),
+                level: "warn",
+                source: "agent",
+                message:
+                  error instanceof Error ?
+                    `最终消息刷新失败：${error.message}`
+                  : "最终消息刷新失败",
+              });
+            }
+
+            if (!loadedFinalMessages) {
+              setMessages((current) =>
+                updateMessage(
+                  current,
+                  assistantMessage.id,
+                  {
+                    content: "结果已生成，但最终消息刷新失败，请刷新页面查看。",
+                    id: event.finalMessageId,
+                    status: "complete",
+                  },
+                ),
               );
-              return updateMessage(
-                current,
-                assistantMessage.id,
-                {
-                  content:
-                    assistant?.content.trim() ?
-                      assistant.content
-                    : assistant?.artifacts?.length ?
-                      "文件已生成，可以直接下载。"
-                    : "没有收到模型回复，请再试一次。",
-                  id: event.finalMessageId,
-                  status: "complete",
-                },
-              );
-            });
+            }
           }
 
           if (event.type === "run.failed") {
@@ -2136,6 +2086,7 @@ export function ChatWorkspace({
         );
       }
     } finally {
+      isStreamingRef.current = false;
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
