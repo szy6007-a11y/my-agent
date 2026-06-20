@@ -12,7 +12,7 @@ test("PromptAssembler includes the production output protocol contract", async (
     platform: "webui",
   });
 
-  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.web-grounding-v2");
+  assert.equal(assembly.metadata?.promptVersion, "2026-06-20.task-delegation-guidance-v1");
   assert.match(assembly.prompt, /<output_protocol_guidance/);
   assert.match(assembly.prompt, /工具只能通过系统原生 tool call 通道调用/);
   assert.match(assembly.prompt, /禁止把工具调用写成 XML、HTML、Markdown、JSON、函数调用文本、DSML/);

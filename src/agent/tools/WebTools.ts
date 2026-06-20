@@ -14,7 +14,6 @@ import {
   type WebSearchRegistry,
 } from "@/agent/web/WebSearchRegistry";
 import { enrichGitHubSearchResults } from "@/agent/web/GitHubMetadata";
-import { enrichMarketSearchResults } from "@/agent/web/MarketData";
 import type { WebExtractDocument } from "@/agent/web/types";
 import { validateExternalUrl } from "@/agent/web/urlSafety";
 import type { AgentTool, ToolExecutionContext } from "@/agent/tools/types";
@@ -80,15 +79,13 @@ function formatSearchResult(
   const githubRepositories = result.data.web
     .map((item) => item.metadata?.github)
     .filter((item): item is GitHubRepositoryMetadata => Boolean(item));
-  const marketData = result.data.market_data ?? [];
 
   return JSON.stringify({
     ...result,
     ...(fallback ? { fallback } : {}),
     ...(githubRepositories.length > 0 ? { github_repositories: githubRepositories } : {}),
-    ...(marketData.length > 0 ? { market_data: marketData } : {}),
     citations:
-      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. For GitHub repository star/fork counts, use data.web[].metadata.github or github_repositories only. For market/index prices or closes, use data.market_data or market_data when present. Do not infer current counts or market prices from search snippets.",
+      "When using web_search results, cite sources with markdown links and do not imply unsupported facts. For GitHub repository star/fork counts, use data.web[].metadata.github or github_repositories only; do not infer current counts from search snippets.",
     sources: result.data.web.map((item) => ({
       title: item.title,
       url: item.url,
@@ -100,20 +97,15 @@ async function enrichSearchResult(result: WebSearchResponse, context: ToolExecut
   if (!result.success) {
     return result;
   }
-  const githubEnriched = {
+  return {
     ...result,
     data: {
-      ...result.data,
       web: await enrichGitHubSearchResults(result.data.web, {
         signal: context.signal,
         timeoutMs: configuredWebTimeoutMs(),
       }),
     },
   };
-  return await enrichMarketSearchResults(githubEnriched, {
-    signal: context.signal,
-    timeoutMs: configuredWebTimeoutMs(),
-  });
 }
 
 async function validateExtractUrls(rawUrls: unknown) {
@@ -158,7 +150,7 @@ export function createWebTools(registry: WebSearchRegistry = createDefaultWebSea
     definition: {
       function: {
         description:
-          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, and a citation reminder. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Market price/close queries are enriched with structured market_data from a symbol-driven finance provider when a supported symbol can be discovered from search results or the query; use that field for closing values instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
+          "Search the live web for current information. Returns titles, URLs, descriptions, provider metadata, and a citation reminder. GitHub repository results are enriched with live GitHub REST API metadata when available, including stars/forks; use those structured fields for repository counts instead of snippets. Query operators such as site:domain, filetype:pdf, intitle:word, -term, and exact phrases may work when the provider supports them.",
         name: "web_search",
         parameters: {
           properties: {
