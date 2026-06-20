@@ -1764,18 +1764,19 @@ body > button[aria-label="Open Next.js Dev Tools"],
   display: flex;
   width: 100%;
   align-items: flex-end;
-  gap: 6px;
+  min-height: 52px;
+  gap: 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 22px;
   background: #ffffff;
   box-shadow: var(--shadow);
-  padding: 8px;
+  padding: 8px 10px;
 }
 
 .composer textarea {
   display: block;
   min-height: 24px;
-  max-height: 160px;
+  max-height: 96px;
   flex: 1;
   resize: none;
   border: 0;
