@@ -14,6 +14,7 @@ export type ApprovalRepository = {
     approvalId: string;
     decision: ToolApprovalDecision;
     decisionReason?: string;
+    response?: unknown;
     userId: string;
   }): Promise<StoredToolApproval | null>;
 };
@@ -40,12 +41,14 @@ export class ApprovalController {
     approvalId: string;
     decision: ToolApprovalDecision;
     reason?: string;
+    response?: unknown;
     userId: string;
   }): Promise<ResolveToolApprovalResult> {
     const approval = await this.sessions.resolveToolApproval({
       approvalId: input.approvalId,
       decision: input.decision,
       decisionReason: input.reason,
+      response: input.response,
       userId: input.userId,
     });
 

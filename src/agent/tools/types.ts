@@ -4,7 +4,10 @@ import type {
   PermissionMode,
   ToolRisk,
 } from "@/agent/runtime/types";
-import type { SessionRepository } from "@/agent/sessions/SessionRepository";
+import type {
+  SessionRepository,
+  StoredToolApproval,
+} from "@/agent/sessions/SessionRepository";
 import type { FileReadState } from "@/agent/tools/FileReadState";
 
 export type ToolExecutionContext = {
@@ -22,6 +25,12 @@ export type ToolValidationResult =
   | { extra?: Record<string, unknown>; message: string; ok: false };
 
 export type AgentTool = {
+  applyApprovalDecision?: (
+    args: unknown,
+    approval: StoredToolApproval,
+    context: ToolExecutionContext,
+    toolCall: ModelToolCall,
+  ) => Promise<unknown> | unknown;
   buildApproval?: (
     args: unknown,
     context: ToolExecutionContext,
@@ -40,6 +49,7 @@ export type AgentTool = {
         context: ToolExecutionContext,
         toolCall: ModelToolCall,
       ) => Promise<boolean> | boolean);
+  requiresUserInteraction?: boolean;
   risk?: ToolRisk;
   validateInput?: (
     args: unknown,

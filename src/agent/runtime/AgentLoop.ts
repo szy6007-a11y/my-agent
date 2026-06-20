@@ -26,6 +26,7 @@ import type {
   AgentArtifact,
   AgentEvent,
   AgentMessage,
+  AskUserQuestionRequest,
   ModelMessage,
   ModelToolCall,
   PermissionMode,
@@ -201,6 +202,29 @@ function toolRisk(tool: AgentTool | undefined): ToolRisk {
   return tool?.risk ?? (tool?.isReadOnly ? "read" : "write");
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ?
+      (value as Record<string, unknown>)
+    : null;
+}
+
+function askUserQuestionRequestFromApprovalRequest(
+  request: unknown,
+): AskUserQuestionRequest | null {
+  const requestRecord = asRecord(request);
+  const details =
+    requestRecord && "details" in requestRecord ? requestRecord.details : request;
+  const detailRecord = asRecord(details);
+  if (
+    detailRecord?.kind !== "ask_user_question" ||
+    !Array.isArray(detailRecord.questions)
+  ) {
+    return null;
+  }
+
+  return detailRecord as AskUserQuestionRequest;
+}
+
 async function toolNeedsApproval(
   tool: AgentTool | undefined,
   permissionMode: PermissionMode,
@@ -212,16 +236,12 @@ async function toolNeedsApproval(
     return false;
   }
 
+  if (tool.requiresUserInteraction === true) {
+    return true;
+  }
+
   if (permissionMode === "bypass") {
     return false;
-  }
-
-  if (tool.isReadOnly === true) {
-    return false;
-  }
-
-  if (permissionMode === "read-only") {
-    return true;
   }
 
   if (typeof tool.requiresApproval === "function") {
@@ -233,6 +253,14 @@ async function toolNeedsApproval(
   }
 
   if (tool.requiresApproval === true) {
+    return true;
+  }
+
+  if (tool.isReadOnly === true) {
+    return false;
+  }
+
+  if (permissionMode === "read-only") {
     return true;
   }
 
@@ -858,6 +886,8 @@ export class AgentLoop {
                   toolName: prepared.toolCall.name,
                   userId: input.userId,
                 });
+                const questionRequest =
+                  askUserQuestionRequestFromApprovalRequest(approvalRequest);
                 yield {
                   type: "tool.approval.required",
                   approvalId: approval.id,
@@ -868,6 +898,18 @@ export class AgentLoop {
                   toolCallId: prepared.toolCall.id,
                   toolName: prepared.toolCall.name,
                 };
+                if (questionRequest) {
+                  yield {
+                    type: "tool.question.required",
+                    message: reason,
+                    questionId: approval.id,
+                    questions: questionRequest.questions,
+                    request: questionRequest,
+                    runId: input.runId,
+                    toolCallId: prepared.toolCall.id,
+                    toolName: prepared.toolCall.name,
+                  };
+                }
                 yield {
                   type: "tool.confirmation.required",
                   confirmationId: approval.id,
@@ -899,7 +941,29 @@ export class AgentLoop {
                 await this.sessions.updateRunStatus(input.runId, "executing_tools");
                 if (approved) {
                   const startedAt = Date.now();
-                  result = await tools.executePrepared(prepared, toolContext);
+                  if (prepared.tool.applyApprovalDecision) {
+                    try {
+                      const approvedArgs = await prepared.tool.applyApprovalDecision(
+                        prepared.args,
+                        decision,
+                        toolContext,
+                        prepared.toolCall,
+                      );
+                      parsedInput = approvedArgs;
+                      result = await tools.executePrepared(
+                        { ...prepared, args: approvedArgs },
+                        toolContext,
+                      );
+                    } catch (error) {
+                      result = toolError(
+                        error instanceof Error ?
+                          error.message
+                        : "Tool approval payload could not be applied.",
+                      );
+                    }
+                  } else {
+                    result = await tools.executePrepared(prepared, toolContext);
+                  }
                   durationMs = Date.now() - startedAt;
                 } else {
                   const deniedReason =

@@ -28,7 +28,13 @@ import type {
   ServiceHealthState,
   ServiceHealthStatus,
 } from "@/lib/service-health";
-import type { AgentArtifact, AgentEvent } from "@/shared/agent-protocol";
+import type {
+  AgentArtifact,
+  AgentEvent,
+  AskUserQuestion,
+  AskUserQuestionRequest,
+  AskUserQuestionResponse,
+} from "@/shared/agent-protocol";
 import { stripTrustedRuntimeReminder } from "@/shared/runtime-reminder";
 
 type ChatMessage = {
@@ -192,15 +198,38 @@ function logLevelLabel(level: ServiceConsoleLog["level"]) {
   return "信息";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ?
+      (value as Record<string, unknown>)
+    : null;
+}
+
+function approvalDetails(request: unknown): unknown {
+  const requestRecord = asRecord(request);
+  return requestRecord && "details" in requestRecord ? requestRecord.details : request;
+}
+
+function askUserQuestionRequestFromApproval(
+  request: unknown,
+): AskUserQuestionRequest | null {
+  const details = approvalDetails(request);
+  const record = asRecord(details);
+  if (record?.kind !== "ask_user_question" || !Array.isArray(record.questions)) {
+    return null;
+  }
+
+  return record as AskUserQuestionRequest;
+}
+
 function approvalDetailLines(request: unknown): string[] {
-  const details =
-    request && typeof request === "object" && "details" in request ?
-      (request as { details?: unknown }).details
-    : request;
+  const details = approvalDetails(request);
   if (!details || typeof details !== "object") {
     return [];
   }
   const record = details as Record<string, unknown>;
+  if (record.kind === "ask_user_question") {
+    return [];
+  }
   const operation =
     record.operation === "create" ? "创建"
     : record.operation === "update" ? "覆盖"
@@ -335,6 +364,240 @@ function ArtifactList({ artifacts }: { artifacts?: AgentArtifact[] }) {
           </a>
         );
       })}
+    </div>
+  );
+}
+
+type AskQuestionDraft = {
+  notes: string;
+  other: string;
+  selectedLabels: string[];
+};
+
+function emptyQuestionDraft(): AskQuestionDraft {
+  return {
+    notes: "",
+    other: "",
+    selectedLabels: [],
+  };
+}
+
+function initialQuestionDrafts(request: AskUserQuestionRequest) {
+  return Object.fromEntries(
+    request.questions.map((question) => [question.question, emptyQuestionDraft()]),
+  ) as Record<string, AskQuestionDraft>;
+}
+
+function questionDraft(
+  drafts: Record<string, AskQuestionDraft>,
+  question: AskUserQuestion,
+) {
+  return drafts[question.question] ?? emptyQuestionDraft();
+}
+
+function questionHasAnswer(
+  drafts: Record<string, AskQuestionDraft>,
+  question: AskUserQuestion,
+) {
+  const draft = questionDraft(drafts, question);
+  return draft.selectedLabels.length > 0 || draft.other.trim().length > 0;
+}
+
+function buildQuestionResponse(
+  request: AskUserQuestionRequest,
+  drafts: Record<string, AskQuestionDraft>,
+): AskUserQuestionResponse {
+  const answers: AskUserQuestionResponse["answers"] = {};
+  const annotations: NonNullable<AskUserQuestionResponse["annotations"]> = {};
+
+  for (const question of request.questions) {
+    const draft = questionDraft(drafts, question);
+    const custom = draft.other.trim();
+    const selected = draft.selectedLabels.filter(Boolean);
+    const answerParts = question.multiSelect ?
+      [...selected, ...(custom ? [custom] : [])]
+    : [custom || selected[0] || ""];
+    const answer = answerParts.join(", ").trim();
+    answers[question.question] = answer;
+
+    const preview = question.options
+      .filter((option) => selected.includes(option.label) && option.preview)
+      .map((option) => option.preview)
+      .join("\n\n")
+      .trim();
+    const notes = draft.notes.trim();
+    if (preview || notes) {
+      annotations[question.question] = {
+        ...(notes ? { notes } : {}),
+        ...(preview ? { preview } : {}),
+      };
+    }
+  }
+
+  return {
+    answers,
+    ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
+  };
+}
+
+function AskUserQuestionApproval({
+  approval,
+  onApprove,
+  onReject,
+  request,
+}: {
+  approval: PendingApproval;
+  onApprove: (approval: PendingApproval, response: AskUserQuestionResponse) => void;
+  onReject: (approval: PendingApproval) => void;
+  request: AskUserQuestionRequest;
+}) {
+  const [drafts, setDrafts] = useState<Record<string, AskQuestionDraft>>(() =>
+    initialQuestionDrafts(request),
+  );
+
+  const allAnswered = request.questions.every((question) =>
+    questionHasAnswer(drafts, question),
+  );
+  const submitting = approval.state === "submitting";
+
+  function updateDraft(question: AskUserQuestion, update: (draft: AskQuestionDraft) => AskQuestionDraft) {
+    setDrafts((current) => {
+      const currentDraft = questionDraft(current, question);
+      return {
+        ...current,
+        [question.question]: update(currentDraft),
+      };
+    });
+  }
+
+  return (
+    <div className="question-approval" key={approval.approvalId}>
+      <div className="question-approval-head">
+        <span className="question-approval-copy">
+          <strong>{approval.toolName}</strong>
+          <span>{approval.reason}</span>
+        </span>
+        <button
+          aria-label={`拒绝 ${approval.toolName}`}
+          className="approval-action reject"
+          disabled={submitting}
+          onClick={() => onReject(approval)}
+          title="拒绝"
+          type="button"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      {request.questions.map((question, questionIndex) => {
+        const draft = questionDraft(drafts, question);
+        const selectedPreviews = question.options.filter(
+          (option) => draft.selectedLabels.includes(option.label) && option.preview,
+        );
+
+        return (
+          <div className="question-block" key={`${question.question}-${questionIndex}`}>
+            <span className="question-kicker">{question.header}</span>
+            <strong className="question-title">{question.question}</strong>
+            <div className="question-options">
+              {question.options.map((option) => {
+                const checked = draft.selectedLabels.includes(option.label);
+                return (
+                  <label
+                    className={`question-option ${checked ? "selected" : ""}`}
+                    key={option.label}
+                  >
+                    <input
+                      checked={checked}
+                      disabled={submitting}
+                      name={`${approval.approvalId}-${questionIndex}`}
+                      onChange={(event) => {
+                        const isChecked = event.target.checked;
+                        updateDraft(question, (currentDraft) => {
+                          if (question.multiSelect) {
+                            const selectedLabels =
+                              isChecked ?
+                                Array.from(
+                                  new Set([...currentDraft.selectedLabels, option.label]),
+                                )
+                              : currentDraft.selectedLabels.filter(
+                                  (label) => label !== option.label,
+                                );
+                            return { ...currentDraft, selectedLabels };
+                          }
+
+                          return {
+                            ...currentDraft,
+                            other: "",
+                            selectedLabels: isChecked ? [option.label] : [],
+                          };
+                        });
+                      }}
+                      type={question.multiSelect ? "checkbox" : "radio"}
+                    />
+                    <span className="question-option-copy">
+                      <strong>{option.label}</strong>
+                      <span>{option.description}</span>
+                    </span>
+                  </label>
+                );
+              })}
+              <label className={`question-option other ${draft.other.trim() ? "selected" : ""}`}>
+                <span className="question-option-copy">
+                  <strong>其他</strong>
+                  <input
+                    disabled={submitting}
+                    onChange={(event) => {
+                      const nextOther = event.target.value;
+                      updateDraft(question, (currentDraft) => ({
+                        ...currentDraft,
+                        other: nextOther,
+                        selectedLabels:
+                          question.multiSelect || nextOther.trim().length === 0 ?
+                            currentDraft.selectedLabels
+                          : [],
+                      }));
+                    }}
+                    placeholder="填写其他答案"
+                    type="text"
+                    value={draft.other}
+                  />
+                </span>
+              </label>
+            </div>
+            {selectedPreviews.length > 0 && (
+              <div className="question-previews">
+                {selectedPreviews.map((option) => (
+                  <pre key={option.label}>{option.preview}</pre>
+                ))}
+              </div>
+            )}
+            <textarea
+              className="question-notes"
+              disabled={submitting}
+              onChange={(event) => {
+                const notes = event.target.value;
+                updateDraft(question, (currentDraft) => ({ ...currentDraft, notes }));
+              }}
+              placeholder="备注，可选"
+              rows={2}
+              value={draft.notes}
+            />
+          </div>
+        );
+      })}
+
+      <div className="question-approval-footer">
+        <button
+          className="question-submit"
+          disabled={!allAnswered || submitting}
+          onClick={() => onApprove(approval, buildQuestionResponse(request, drafts))}
+          type="button"
+        >
+          <Check size={16} />
+          提交回答
+        </button>
+      </div>
     </div>
   );
 }
@@ -1103,6 +1366,34 @@ export function ChatWorkspace() {
             });
           }
 
+          if (event.type === "tool.question.required") {
+            setActiveRun((current) =>
+              current?.runId === event.runId ?
+                { ...current, status: "waiting_approval" }
+              : current,
+            );
+            setPendingApprovals((current) => {
+              const nextApproval: PendingApproval = {
+                approvalId: event.questionId,
+                reason: event.message,
+                request: event.request,
+                risk: "read",
+                runId: event.runId,
+                state: "pending",
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+              };
+
+              if (current.some((approval) => approval.approvalId === event.questionId)) {
+                return current.map((approval) =>
+                  approval.approvalId === event.questionId ? nextApproval : approval,
+                );
+              }
+
+              return [...current, nextApproval];
+            });
+          }
+
           if (event.type === "tool.confirmation.required") {
             appendConsoleLog({
               at: new Date().toISOString(),
@@ -1278,6 +1569,7 @@ export function ChatWorkspace() {
   async function resolveApproval(
     approval: PendingApproval,
     decision: "approved" | "rejected",
+    approvalResponse?: AskUserQuestionResponse,
   ) {
     setPendingApprovals((current) =>
       current.map((item) =>
@@ -1291,7 +1583,10 @@ export function ChatWorkspace() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify({
+            decision,
+            ...(approvalResponse ? { response: approvalResponse } : {}),
+          }),
         },
       );
 
@@ -1695,39 +1990,58 @@ export function ChatWorkspace() {
                   </span>
                 </div>
               )}
-              {pendingApprovals.map((approval) => (
-                <div className="approval-row" key={approval.approvalId}>
-                  <span className="approval-copy">
-                    <strong>{approval.toolName}</strong>
-                    <span>{approval.reason}</span>
-                    {approvalDetailLines(approval.request).map((line) => (
-                      <small key={line}>{line}</small>
-                    ))}
-                  </span>
-                  <span className="approval-actions">
-                    <button
-                      aria-label={`批准 ${approval.toolName}`}
-                      className="approval-action approve"
-                      disabled={approval.state === "submitting"}
-                      onClick={() => void resolveApproval(approval, "approved")}
-                      title="批准"
-                      type="button"
-                    >
-                      <Check size={16} />
-                    </button>
-                    <button
-                      aria-label={`拒绝 ${approval.toolName}`}
-                      className="approval-action reject"
-                      disabled={approval.state === "submitting"}
-                      onClick={() => void resolveApproval(approval, "rejected")}
-                      title="拒绝"
-                      type="button"
-                    >
-                      <X size={16} />
-                    </button>
-                  </span>
-                </div>
-              ))}
+              {pendingApprovals.map((approval) => {
+                const questionRequest = askUserQuestionRequestFromApproval(approval.request);
+                if (questionRequest) {
+                  return (
+                    <AskUserQuestionApproval
+                      approval={approval}
+                      key={approval.approvalId}
+                      onApprove={(approvalItem, response) =>
+                        void resolveApproval(approvalItem, "approved", response)
+                      }
+                      onReject={(approvalItem) =>
+                        void resolveApproval(approvalItem, "rejected")
+                      }
+                      request={questionRequest}
+                    />
+                  );
+                }
+
+                return (
+                  <div className="approval-row" key={approval.approvalId}>
+                    <span className="approval-copy">
+                      <strong>{approval.toolName}</strong>
+                      <span>{approval.reason}</span>
+                      {approvalDetailLines(approval.request).map((line) => (
+                        <small key={line}>{line}</small>
+                      ))}
+                    </span>
+                    <span className="approval-actions">
+                      <button
+                        aria-label={`批准 ${approval.toolName}`}
+                        className="approval-action approve"
+                        disabled={approval.state === "submitting"}
+                        onClick={() => void resolveApproval(approval, "approved")}
+                        title="批准"
+                        type="button"
+                      >
+                        <Check size={16} />
+                      </button>
+                      <button
+                        aria-label={`拒绝 ${approval.toolName}`}
+                        className="approval-action reject"
+                        disabled={approval.state === "submitting"}
+                        onClick={() => void resolveApproval(approval, "rejected")}
+                        title="拒绝"
+                        type="button"
+                      >
+                        <X size={16} />
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
             </section>
           )}
 

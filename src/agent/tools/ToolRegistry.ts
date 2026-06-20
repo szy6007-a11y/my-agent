@@ -1,3 +1,4 @@
+import { askUserQuestionTool } from "@/agent/tools/AskUserQuestionTool";
 import { createFileTools } from "@/agent/tools/FileTools";
 import { memoryTool } from "@/agent/tools/MemoryTool";
 import { sessionSearchTool } from "@/agent/tools/SessionSearchTool";
@@ -17,6 +18,7 @@ function defaultTools(): AgentTool[] {
   return [
     memoryTool,
     sessionSearchTool,
+    askUserQuestionTool,
     ...createWebTools(),
     ...createFileTools(),
     ...createSkillTools(),
@@ -55,7 +57,10 @@ export class ToolRegistry {
         isReadOnly,
         name: tool.name,
         requiresApproval:
-          tool.requiresApproval === true || typeof tool.requiresApproval === "function" || !isReadOnly,
+          tool.requiresUserInteraction === true ||
+          tool.requiresApproval === true ||
+          typeof tool.requiresApproval === "function" ||
+          !isReadOnly,
         risk: tool.risk ?? (isReadOnly ? "read" : "write"),
       };
     });

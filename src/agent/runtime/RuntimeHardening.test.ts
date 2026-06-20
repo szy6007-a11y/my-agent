@@ -61,6 +61,7 @@ class FakeSessionRepository {
   readonly statuses: RunStatus[] = [];
   readonly updatedMessages: Array<{ content: string; messageId: string }> = [];
   approvalDecision: "approved" | "rejected" | "expired" = "approved";
+  approvalResponse: unknown = undefined;
   promptSnapshot: PromptAssembly | null = makePrompt("static prompt");
   runStatus: RunStatus | null = null;
 
@@ -160,7 +161,10 @@ class FakeSessionRepository {
     return {
       ...approval,
       createdAt: new Date(0).toISOString(),
-      decision: { decision: this.approvalDecision },
+      decision: {
+        decision: this.approvalDecision,
+        response: this.approvalResponse ?? null,
+      },
       resolvedAt: new Date(1).toISOString(),
     };
   }
@@ -233,6 +237,46 @@ class FakeWriteToolCallModelRouter {
     }
 
     yield { type: "text_delta" as const, text: "写入完成。" };
+  }
+}
+
+class FakeQuestionToolCallModelRouter {
+  readonly payloads: ModelMessage[][] = [];
+
+  async *stream(input: ModelStreamInput) {
+    this.payloads.push(input.context.messages);
+    if (this.payloads.length === 1) {
+      yield {
+        type: "tool_calls" as const,
+        toolCalls: [
+          {
+            arguments: JSON.stringify({
+              questions: [
+                {
+                  question: "应该优先走哪条路径？",
+                  header: "实现路径",
+                  options: [
+                    {
+                      label: "生产级实现 (Recommended)",
+                      description: "完整接入运行时、审批、前端和测试。",
+                    },
+                    {
+                      label: "最小实现",
+                      description: "只补一个后端工具。",
+                    },
+                  ],
+                },
+              ],
+            }),
+            id: "call_question",
+            name: "ask_user_question",
+          },
+        ],
+      };
+      return;
+    }
+
+    yield { type: "text_delta" as const, text: "已按用户回答继续。" };
   }
 }
 
@@ -791,6 +835,69 @@ test("AgentLoop waits for approval and executes write tools after confirmation",
     /"success":true/,
   );
   assert.equal(sessions.messages.at(-1)?.content, "写入完成。");
+});
+
+test("AgentLoop waits for interactive read-only tools even in bypass mode", async () => {
+  const [{ ContextEngine }, { AgentLoop }, { ToolRegistry }, { askUserQuestionTool }] =
+    await Promise.all([
+      import("@/agent/context/ContextEngine"),
+      import("@/agent/runtime/AgentLoop"),
+      import("@/agent/tools/ToolRegistry"),
+      import("@/agent/tools/AskUserQuestionTool"),
+    ]);
+  const sessions = new FakeSessionRepository([
+    {
+      id: "user_1",
+      content: "需要我决定时先问我",
+      createdAt: new Date(0).toISOString(),
+      role: "user",
+    },
+  ]);
+  sessions.approvalResponse = {
+    answers: {
+      "应该优先走哪条路径？": "生产级实现 (Recommended)",
+    },
+  };
+  const modelRouter = new FakeQuestionToolCallModelRouter();
+  const loop = new AgentLoop(
+    new ContextEngine({ assemble: () => makePrompt("static prompt") } as unknown as PromptAssembler),
+    modelRouter as unknown as ModelRouter,
+    sessions as unknown as SessionRepository,
+    new NoopBackgroundReview() as unknown as BackgroundReviewAgent,
+    undefined,
+    undefined,
+    () => new ToolRegistry([askUserQuestionTool]),
+  );
+
+  const events = await drain(
+    loop.execute({
+      maxTokens: 64,
+      model: "deepseek-v4-flash",
+      permissionMode: "bypass",
+      runId: "run_question_approval",
+      sessionId: "sess_1",
+      signal: new AbortController().signal,
+      thinking: "disabled",
+      userId: "usr_1",
+      userMessageId: "user_1",
+    }),
+  );
+
+  assert.equal(events.some((event) => event.type === "tool.approval.required"), true);
+  assert.equal(events.some((event) => event.type === "tool.question.required"), true);
+  assert.equal(events.some((event) => event.type === "tool.completed"), true);
+  assert.equal(events.some((event) => event.type === "tool.failed"), false);
+  assert.equal(sessions.statuses.includes("waiting_approval"), true);
+  assert.equal(
+    JSON.stringify(sessions.approvals[0]?.request).includes("\"kind\":\"ask_user_question\""),
+    true,
+  );
+  assert.match(
+    sessions.messages.find((message) => message.role === "tool")?.content ?? "",
+    /生产级实现/,
+  );
+  assert.equal(JSON.stringify(modelRouter.payloads[1]).includes("生产级实现"), true);
+  assert.equal(sessions.messages.at(-1)?.content, "已按用户回答继续。");
 });
 
 test("AgentLoop can approve the first chunk and continue ordered chunk appends without repeated approval", async () => {

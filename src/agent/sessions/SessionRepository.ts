@@ -1747,6 +1747,7 @@ export class SessionRepository {
     approvalId: string;
     decision: ToolApprovalDecision;
     decisionReason?: string;
+    response?: unknown;
     userId: string;
   }): Promise<StoredToolApproval | null> {
     await ready();
@@ -1758,6 +1759,7 @@ export class SessionRepository {
         decision_json = ${db.json(toJson({
           decision: input.decision,
           reason: input.decisionReason ?? null,
+          response: input.response ?? null,
           resolvedBy: input.userId,
         }))},
         resolved_at = now()

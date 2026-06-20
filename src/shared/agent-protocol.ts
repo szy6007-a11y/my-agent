@@ -52,6 +52,35 @@ export type ToolApprovalStatus = "pending" | "approved" | "rejected" | "expired"
 
 export type RunQueueMode = "followup" | "interrupt" | "steer" | "collect";
 
+export type AskUserQuestionOption = {
+  label: string;
+  description: string;
+  preview?: string;
+};
+
+export type AskUserQuestion = {
+  question: string;
+  header: string;
+  options: AskUserQuestionOption[];
+  multiSelect?: boolean;
+};
+
+export type AskUserQuestionAnnotation = {
+  notes?: string;
+  preview?: string;
+};
+
+export type AskUserQuestionRequest = {
+  kind: "ask_user_question";
+  questions: AskUserQuestion[];
+  metadata?: Record<string, unknown>;
+};
+
+export type AskUserQuestionResponse = {
+  answers: Record<string, string>;
+  annotations?: Record<string, AskUserQuestionAnnotation>;
+};
+
 export type ToolUiManifest = {
   description?: string;
   displayName: string;
@@ -122,6 +151,16 @@ export type AgentEvent =
       toolCallId: string;
       toolName: string;
       risk: ToolRisk;
+    }
+  | {
+      type: "tool.question.required";
+      message: string;
+      questionId: string;
+      questions: AskUserQuestion[];
+      request?: AskUserQuestionRequest;
+      runId: string;
+      toolCallId: string;
+      toolName: string;
     }
   | {
       type: "tool.confirmation.required";

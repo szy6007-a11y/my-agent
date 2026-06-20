@@ -14,6 +14,23 @@ type RouteContext = {
 const requestSchema = z.object({
   decision: z.enum(["approved", "rejected"]),
   reason: z.string().max(1_000).optional(),
+  response: z
+    .object({
+      answers: z.record(z.string(), z.string().max(5_000)),
+      annotations: z
+        .record(
+          z.string(),
+          z
+            .object({
+              notes: z.string().max(5_000).optional(),
+              preview: z.string().max(20_000).optional(),
+            })
+            .strict(),
+        )
+        .optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 export async function POST(request: NextRequest, context: RouteContext) {
@@ -35,6 +52,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     approvalId,
     decision: body.decision,
     reason: body.reason,
+    response: body.response,
     userId: auth.user.id,
   });
 

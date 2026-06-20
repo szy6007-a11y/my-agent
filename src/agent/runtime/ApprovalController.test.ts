@@ -34,6 +34,7 @@ class FakeApprovalRepository {
     approvalId: string;
     decision: ToolApprovalDecision;
     decisionReason?: string;
+    response?: unknown;
     userId: string;
   }> = [];
   runEvents: Array<{ event: AgentEvent; runId: string }> = [];
@@ -50,6 +51,7 @@ class FakeApprovalRepository {
     approvalId: string;
     decision: ToolApprovalDecision;
     decisionReason?: string;
+    response?: unknown;
     userId: string;
   }) {
     this.resolveCalls.push(input);
@@ -74,6 +76,11 @@ test("ApprovalController resolves a pending approval", async () => {
     approvalId: "approval_1",
     decision: "approved",
     reason: "用户确认",
+    response: {
+      answers: {
+        "继续吗？": "继续",
+      },
+    },
     userId: "usr_1",
   });
 
@@ -83,6 +90,11 @@ test("ApprovalController resolves a pending approval", async () => {
       approvalId: "approval_1",
       decision: "approved",
       decisionReason: "用户确认",
+      response: {
+        answers: {
+          "继续吗？": "继续",
+        },
+      },
       userId: "usr_1",
     },
   ]);
