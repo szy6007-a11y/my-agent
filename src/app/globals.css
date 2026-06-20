@@ -1773,7 +1773,8 @@ body > button[aria-label="Open Next.js Dev Tools"],
 }
 
 .composer textarea {
-  min-height: 34px;
+  display: block;
+  min-height: 24px;
   max-height: 160px;
   flex: 1;
   resize: none;
@@ -1781,7 +1782,9 @@ body > button[aria-label="Open Next.js Dev Tools"],
   outline: 0;
   background: transparent;
   color: var(--foreground);
-  line-height: 34px;
+  line-height: 24px;
+  overflow-y: hidden;
+  padding: 0;
 }
 
 .mode-button {
